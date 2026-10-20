@@ -1,0 +1,405 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Trident CSI 容器存储接入手册 · ImsayingOhh</title><meta name="description" content="把企业级 NAS 存储接入 Kubernetes 的完整流程，含 CSI 驱动安装、后端配置与存储类验证。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/trident-csi%E5%AE%B9%E5%99%A8%E5%AD%98%E5%82%A8/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="Trident CSI 容器存储接入手册 · ImsayingOhh"><meta property="og:description" content="把企业级 NAS 存储接入 Kubernetes 的完整流程，含 CSI 驱动安装、后端配置与存储类验证。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/trident-csi%E5%AE%B9%E5%99%A8%E5%AD%98%E5%82%A8/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.W5_X7z54.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑"> <a href="/">首页</a> <span>/</span> <a href="/archives/">文章</a> <span>/</span> <span aria-current="page">运维手册</span> </nav> <h1 class="post-title">Trident CSI 容器存储接入手册</h1> <p class="post-desc">把企业级 NAS 存储接入 Kubernetes 的完整流程，含 CSI 驱动安装、后端配置与存储类验证。</p> <div class="post-meta"> <time datetime="2026-10-21T00:40:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>5 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/Trident/">Trident</a><a class="tag" href="/tags/CSI/">CSI</a><a class="tag" href="/tags/%E5%AD%98%E5%82%A8/">存储</a><a class="tag" href="/tags/Kubernetes/">Kubernetes</a> </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>Trident 是企业级 NAS 存储在 Kubernetes 上的 CSI 驱动：以容器方式跑在集群里，把卷的创建、挂载、扩容、快照这些动作交给集群自己完成，业务侧只需要提交一个 PVC。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>新集群要接集中式 NAS 存储，希望 PV 能按 PVC 自动供给，而不是逐个手工建卷。</li>
+<li>业务需要多 Pod 同时读写的共享目录，NFS 形态比块设备更合适。</li>
+<li>希望存储的申请与回收由 K8s 管理员在集群内闭环，不再每次走存储管理员工单。</li>
+<li>老业务上容器平台，要求复用现网已有的 NAS 存储池和既有备份、快照体系。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>集群版本在驱动支持矩阵内。计划升级 Kubernetes 时先升级驱动，再升集群，顺序反了会卡在中间状态。</li>
+<li>存储侧已建好 SVM，划好 aggregate，创建供集群访问的 NFS LIF，导出策略允许节点网段以读写方式访问。</li>
+<li>管理网与业务网互不相通时，要为 SVM 单独配一个业务网段的管理地址，否则驱动连不上存储管理接口，后端一直加不上。</li>
+<li>一套可用的内网镜像仓库，能把安装清单里列出的镜像全部推进去；纯内网环境这一步无法跳过。</li>
+<li>各节点装好 NFS 客户端工具，节点到存储的 RPC 与 NFS 端口放通。</li>
+</ul>
+<h2 id="架构与原理">架构与原理</h2>
+<ul>
+<li>控制器：以 Deployment 形式运行，接收 CSI 请求，调用存储管理接口创建或删除卷，并维护后端配置。</li>
+<li>节点组件：以 DaemonSet 形式运行，每个节点一个 Pod，负责把卷挂到节点上并暴露给容器。</li>
+<li>配置对象：后端、卷、快照等都以 CRD 形式保存在集群中，<code>kubectl get tridentbackends</code> 这类查询是可信来源，排查时优先看它。</li>
+<li>StorageClass 通过 provisioner 名称和 backendType 两个信息，把 PVC 路由到某个后端；PVC 只写容量和存储类名，其余细节由驱动补齐。</li>
+</ul>
+<p>卷的生命周期完全由集群侧驱动：PVC 提交后控制器调存储接口建卷，卷名与 PVC 的标识一一对应；扩容走 allowVolumeExpansion，改大 PVC 容量后由驱动去扩后端卷；删除则取决于回收策略。所以排障时按「PVC → PV → 驱动卷记录 → 存储侧卷名」这条链路逐段对照，能很快判断断在哪一环。</p>
+<h2 id="操作步骤">操作步骤</h2>
+<ol>
+<li>存储侧准备。SVM、aggregate、NFS LIF、导出策略四件事按厂商文档做完，导出策略至少要允许集群节点网段读写：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 示意：命令以存储厂商 CLI 为准，参数中的地址与名称均为占位符</span></span>
+<span class="line"><span style="color:#FFC799">net</span><span style="color:#99FFE4"> int</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> -vserver</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">sv</span><span style="color:#FFF">m</span><span style="color:#A0A0A0">></span><span style="color:#99FFE4"> -lif</span><span style="color:#99FFE4"> svm-nfs-lif</span><span style="color:#99FFE4"> -service-policy</span><span style="color:#99FFE4"> default-data-files</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -address</span><span style="color:#FFC799"> 192.0.2.21</span><span style="color:#99FFE4"> -netmask</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">netmas</span><span style="color:#FFF">k</span><span style="color:#A0A0A0">></span><span style="color:#99FFE4"> -home-node</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">nod</span><span style="color:#FFF">e</span><span style="color:#A0A0A0">></span><span style="color:#99FFE4"> -home-port</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">por</span><span style="color:#FFF">t</span><span style="color:#A0A0A0">></span></span>
+<span class="line"><span style="color:#FFC799">export-policy</span><span style="color:#99FFE4"> rule</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> -policyname</span><span style="color:#99FFE4"> default</span><span style="color:#99FFE4"> -clientmatch</span><span style="color:#99FFE4"> 192.0.2.0/24</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -rorule</span><span style="color:#99FFE4"> any</span><span style="color:#99FFE4"> -rwrule</span><span style="color:#99FFE4"> any</span></span></code></pre>
+<ol start="2">
+<li>下载并解压安装包：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">tar</span><span style="color:#99FFE4"> -zxvf</span><span style="color:#99FFE4"> trident-installer-</span><span style="color:#A0A0A0">&#x3C;</span><span style="color:#99FFE4">versio</span><span style="color:#FFF">n</span><span style="color:#A0A0A0">></span><span style="color:#99FFE4">.tar.gz</span></span>
+<span class="line"><span style="color:#FFC799">cd</span><span style="color:#99FFE4"> trident-installer</span></span>
+<span class="line"><span style="color:#FFC799">./tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> install</span><span style="color:#99FFE4"> --help</span></span></code></pre>
+<ol start="3">
+<li>生成安装清单并把镜像地址改成内网仓库：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">mkdir</span><span style="color:#99FFE4"> -p</span><span style="color:#99FFE4"> ~/trident-work</span><span style="color:#FFF"> &#x26;&#x26; </span><span style="color:#FFC799">cd</span><span style="color:#99FFE4"> ~/trident-work</span></span>
+<span class="line"><span style="color:#FFC799">/path/to/trident-installer/tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> install</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --image-registry</span><span style="color:#99FFE4"> registry-a.example.com/trident</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --silence-autosupport</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --generate-custom-yaml</span></span>
+<span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> "image:"</span><span style="color:#99FFE4"> setup/</span><span style="color:#A0A0A0">*</span><span style="color:#99FFE4">.yaml</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> sort</span><span style="color:#99FFE4"> -u</span></span></code></pre>
+<p>把列出的镜像逐个同步到内网仓库后，从现成清单安装：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">/path/to/trident-installer/tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> install</span><span style="color:#99FFE4"> --use-custom-yaml</span></span></code></pre>
+<ol start="4">
+<li>确认组件已跑起来：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> pods</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> csidrivers</span></span>
+<span class="line"><span style="color:#FFC799">./tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> version</span></span></code></pre>
+<ol start="5">
+<li>建后端凭证对象。账号口令放集群对象里，不要写进后端配置文件：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="yaml"><code><span class="line"><span style="color:#FFC799">apiVersion</span><span style="color:#FFF">: </span><span style="color:#99FFE4">v1</span></span>
+<span class="line"><span style="color:#FFC799">kind</span><span style="color:#FFF">: </span><span style="color:#99FFE4">Secret</span></span>
+<span class="line"><span style="color:#FFC799">metadata</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  name</span><span style="color:#FFF">: </span><span style="color:#99FFE4">nas-backend-auth</span></span>
+<span class="line"><span style="color:#FFC799">  namespace</span><span style="color:#FFF">: </span><span style="color:#99FFE4">trident</span></span>
+<span class="line"><span style="color:#FFC799">type</span><span style="color:#FFF">: </span><span style="color:#99FFE4">Opaque</span></span>
+<span class="line"><span style="color:#FFC799">stringData</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#8B8B8B94">  # 键名与格式按驱动文档要求，值从企业凭据系统取用，勿写入仓库</span></span>
+<span class="line"><span style="color:#FFC799">  credential</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"&#x3C;REDACTED>"</span></span></code></pre>
+<ol start="6">
+<li>写后端配置并提交。managementLIF 填业务网段的管理地址，凭证引用上一步的对象，导出策略交给驱动自动维护：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#FFF">{</span></span>
+<span class="line"><span style="color:#FFC799">  "version"</span><span style="color:#FFF">: </span><span style="color:#FFC799">1</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">  "storageDriverName"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"&#x3C;vendor-nas-driver>"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">  "backendName"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"nas-backend-01"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">  "managementLIF"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"192.0.2.20"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">  "nfsMountOptions"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"nfsvers=3"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">  "credentials"</span><span style="color:#FFF">: { </span><span style="color:#FFC799">"name"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"nas-backend-auth"</span><span style="color:#FFF"> },</span></span>
+<span class="line"><span style="color:#FFC799">  "autoExportPolicy"</span><span style="color:#FFF">: true,</span></span>
+<span class="line"><span style="color:#FFC799">  "autoExportCIDRs"</span><span style="color:#FFF">: [</span><span style="color:#99FFE4">"192.0.2.0/24"</span><span style="color:#FFF">],</span></span>
+<span class="line"><span style="color:#FFC799">  "defaults"</span><span style="color:#FFF">: {</span></span>
+<span class="line"><span style="color:#FFC799">    "spaceReserve"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"none"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">    "snapshotPolicy"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"none"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">    "snapshotReserve"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"0"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">    "unixPermissions"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"777"</span><span style="color:#FFF">,</span></span>
+<span class="line"><span style="color:#FFC799">    "securityStyle"</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"unix"</span></span>
+<span class="line"><span style="color:#FFF">  }</span></span>
+<span class="line"><span style="color:#FFF">}</span></span></code></pre>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">./tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> backend</span><span style="color:#99FFE4"> -f</span><span style="color:#99FFE4"> backend.json</span></span>
+<span class="line"><span style="color:#FFC799">./tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> backend</span><span style="color:#99FFE4"> -o</span><span style="color:#99FFE4"> yaml</span></span></code></pre>
+<p><code>storageDriverName</code> 与 StorageClass 里的 <code>backendType</code> 必须取同一个值，取值以驱动文档为准，不要自己猜。</p>
+<ol start="7">
+<li>创建 StorageClass。provisioner 名称先用 <code>kubectl get csidrivers</code> 查出来再填：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="yaml"><code><span class="line"><span style="color:#FFC799">apiVersion</span><span style="color:#FFF">: </span><span style="color:#99FFE4">storage.k8s.io/v1</span></span>
+<span class="line"><span style="color:#FFC799">kind</span><span style="color:#FFF">: </span><span style="color:#99FFE4">StorageClass</span></span>
+<span class="line"><span style="color:#FFC799">metadata</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  name</span><span style="color:#FFF">: </span><span style="color:#99FFE4">nas-sc</span></span>
+<span class="line"><span style="color:#FFC799">provisioner</span><span style="color:#FFF">: </span><span style="color:#99FFE4">csi.trident.&#x3C;vendor-domain></span></span>
+<span class="line"><span style="color:#FFC799">parameters</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  backendType</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"&#x3C;vendor-nas-driver>"</span></span>
+<span class="line"><span style="color:#FFC799">  provisioningType</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"thin"</span></span>
+<span class="line"><span style="color:#FFC799">  snapshots</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"true"</span></span>
+<span class="line"><span style="color:#FFC799">  clones</span><span style="color:#FFF">: </span><span style="color:#99FFE4">"true"</span></span>
+<span class="line"><span style="color:#FFC799">reclaimPolicy</span><span style="color:#FFF">: </span><span style="color:#99FFE4">Retain</span></span>
+<span class="line"><span style="color:#FFC799">allowVolumeExpansion</span><span style="color:#FFF">: </span><span style="color:#FFC799">true</span></span></code></pre>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> apply</span><span style="color:#99FFE4"> -f</span><span style="color:#99FFE4"> sc.yaml</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> sc</span><span style="color:#99FFE4"> nas-sc</span><span style="color:#99FFE4"> -o</span><span style="color:#99FFE4"> yaml</span></span></code></pre>
+<ol start="8">
+<li>用一个测试 PVC 打通全链路，读写模式按后端能力选 ReadWriteMany：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="yaml"><code><span class="line"><span style="color:#FFC799">apiVersion</span><span style="color:#FFF">: </span><span style="color:#99FFE4">v1</span></span>
+<span class="line"><span style="color:#FFC799">kind</span><span style="color:#FFF">: </span><span style="color:#99FFE4">PersistentVolumeClaim</span></span>
+<span class="line"><span style="color:#FFC799">metadata</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  name</span><span style="color:#FFF">: </span><span style="color:#99FFE4">nas-test-pvc</span></span>
+<span class="line"><span style="color:#FFC799">  namespace</span><span style="color:#FFF">: </span><span style="color:#99FFE4">namespace-demo</span></span>
+<span class="line"><span style="color:#FFC799">spec</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  accessModes</span><span style="color:#FFF">: [</span><span style="color:#99FFE4">"ReadWriteMany"</span><span style="color:#FFF">]</span></span>
+<span class="line"><span style="color:#FFC799">  storageClassName</span><span style="color:#FFF">: </span><span style="color:#99FFE4">nas-sc</span></span>
+<span class="line"><span style="color:#FFC799">  resources</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">    requests</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">      storage</span><span style="color:#FFF">: </span><span style="color:#99FFE4">10Gi</span></span></code></pre>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> namespace-demo</span><span style="color:#99FFE4"> apply</span><span style="color:#99FFE4"> -f</span><span style="color:#99FFE4"> pvc.yaml</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> namespace-demo</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> pvc</span><span style="color:#99FFE4"> nas-test-pvc</span><span style="color:#99FFE4"> -w</span></span></code></pre>
+<p>PVC 变为 Bound 后挂进一个 Pod 写文件，再从另一个 Pod 读回来，确认共享读写正常。</p>
+<h2 id="验证">验证</h2>
+<ul>
+<li><code>kubectl -n trident get pods</code> 中控制器与节点组件全部 Running，节点组件的数量等于节点数。</li>
+<li><code>tridentctl get backend</code> 状态为 success，能看到关联的 aggregate 与可用容量。</li>
+<li><code>kubectl get pv</code> 里新 PV 的 StorageClass 与实际使用的一致，容量与 PVC 申请值相符。</li>
+<li>存储侧按卷名能查到对应 flexvol，说明驱动确实调到了存储。</li>
+<li>快照与克隆按需验证：创建快照后再克隆一个卷，确认数据一致。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li>回收策略是最大的坑：reclaimPolicy 为 Delete 时，删除 PVC 会连存储卷一起删掉。生产一律先用 Retain，清理动作由人来做。</li>
+<li>后端配置文件里的口令在创建成功后已加密存入集群对象，本地文件应清空或妥善保管，别留在跳板机的公共目录。</li>
+<li>版本顺序：先升驱动再升 Kubernetes。驱动卸载与重装期间，已有 PV 的挂载会中断，需在维护窗口做。</li>
+<li>卸载驱动：</li>
+</ul>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">./tridentctl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> trident</span><span style="color:#99FFE4"> uninstall</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> crd</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> trident</span></span></code></pre>
+<p>注意卸载会清理驱动自己的 CRD，但存储侧的卷和数据仍然保留，删除 CRD 前确认没有 PVC 依赖。</p>
+<ul>
+<li>快照与克隆功能依赖存储许可与存储系统版本，能力不具备时先把 StorageClass 里对应开关关掉，避免业务侧误用。</li>
+</ul>
+<h2 id="常见问题">常见问题</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>现象</th><th>常见原因</th><th>处理思路</th></tr></thead><tbody><tr><td>PVC 一直 Pending</td><td>StorageClass 的 backendType 与后端不匹配，或后端未就绪</td><td>对齐两处取值，<code>tridentctl get backend</code> 看状态</td></tr><tr><td>建后端时报连接失败</td><td>managementLIF 不通、网段不通、端口被拦</td><td>从节点上直接探测管理地址与端口</td></tr><tr><td>Pod 挂载失败提示权限不足</td><td>导出策略没放行节点网段</td><td>调整导出规则，核对 autoExportCIDRs</td></tr><tr><td>删除 PVC 后存储侧卷还在</td><td>回收策略是 Retain</td><td>确认数据不再需要后手工删卷</td></tr><tr><td>tridentctl 查询不到资源</td><td>kubeconfig 或命名空间不对</td><td>指定正确 context 与 <code>-n trident</code></td></tr><tr><td>节点组件数量少于节点数</td><td>DaemonSet 有节点未调度</td><td>看是否被污点挡住、镜像是否拉取成功</td></tr></tbody></table> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/velero备份与恢复/"> <span class="label">← 上一篇</span> <span class="title">Velero 容器备份与恢复实践</span> </a> <a class="next" href="/2026/10/21/运维手册/k8s集群新增节点初始化/"> <span class="label">下一篇 →</span> <span class="title">K8s 集群新增节点初始化清单</span> </a> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#架构与原理">架构与原理</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

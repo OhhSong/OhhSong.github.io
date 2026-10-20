@@ -1,0 +1,341 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>vSphere 平台证书轮换与备份存储清理 · ImsayingOhh</title><meta name="description" content="把 vCenter 业务证书重签、备份证书存储清理与主机批量续订串成一条可回退的操作链。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/vmware%E8%AF%81%E4%B9%A6%E8%BD%AE%E6%8D%A2/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="vSphere 平台证书轮换与备份存储清理 · ImsayingOhh"><meta property="og:description" content="把 vCenter 业务证书重签、备份证书存储清理与主机批量续订串成一条可回退的操作链。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/vmware%E8%AF%81%E4%B9%A6%E8%BD%AE%E6%8D%A2/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.W5_X7z54.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑"> <a href="/">首页</a> <span>/</span> <a href="/archives/">文章</a> <span>/</span> <span aria-current="page">运维手册</span> </nav> <h1 class="post-title">vSphere 平台证书轮换与备份存储清理</h1> <p class="post-desc">把 vCenter 业务证书重签、备份证书存储清理与主机批量续订串成一条可回退的操作链。</p> <div class="post-meta"> <time datetime="2026-10-21T03:40:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>6 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/VMware/">VMware</a><a class="tag" href="/tags/%E8%AF%81%E4%B9%A6/">证书</a><a class="tag" href="/tags/%E8%99%9A%E6%8B%9F%E5%8C%96/">虚拟化</a> </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>vSphere 的证书问题，难点很少在“能不能续”，而在于“续完之后告警为什么还在”。一次完整的维护应当分成四段：先盘清到期面，再重签管理节点的业务证书，然后清掉备份存储里的历史残留，最后批量续订受管主机，收尾做交叉验证与告警复位。漏掉任何一段，都会留下反复告警的尾巴。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>vCenter Server Appliance 6.7 / 7.0 / 8.0 环境，证书由内置 VMCA 统一签发；</li>
+<li>巡检发现业务证书剩余有效期进入 30 天窗口，涉及的存储包括 vpxd、machine、vsphere-webclient 与 vpxd-extension；</li>
+<li>证书续期已完成，vCenter 仍持续报证书到期告警；</li>
+<li>受管主机数量较多，需要一次性批量续订主机证书。</li>
+</ul>
+<p>若环境使用第三方 CA 签发证书，或处于链接模式且存在多个 PSC 节点，流程必须按厂商文档裁剪，不能直接套用下文。</p>
+<h2 id="前置条件">前置条件</h2>
+<p>动手之前把下面几条确认到位，比事后回滚便宜得多：</p>
+<ol>
+<li><strong>快照</strong>：对每台待操作的 vCenter 虚拟机拍摄含内存快照，命名带日期，例如 <code>cert-renewal-YYYYMMDD</code>，描述里写清操作人与时间。这是唯一可靠的回滚手段。</li>
+<li><strong>账号与连通</strong>：root 可 SSH 登录设备，SSO 管理员可登录 vSphere Client，设备的 SSH 服务已开启。</li>
+<li><strong>资源与时间</strong>：根分区可用空间不低于 5GB；所有节点 NTP 同步正常。时间漂移会让证书校验出现很难解释的失败。</li>
+<li><strong>业务窗口</strong>：整体重置会重启全部组件，管理平面中断约 5 至 15 分钟，安排在业务低峰。</li>
+<li><strong>工具</strong>：批量续订依赖 PowerCLI，提前在工作站装好，并把无效证书处理策略设为忽略。</li>
+</ol>
+<p>运行在链接模式下的环境，建议按“先关闭其余 PSC 节点、统一做快照、再逐个操作”的顺序推进，避免跨节点状态不一致。</p>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="第一步盘点到期面">第一步：盘点到期面</h3>
+<p>在任一 vCenter 上遍历全部证书存储，把每个条目的别名与到期时间打印出来：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFF">VECS</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">/usr/lib/vmware-vmafd/bin/vecs-cli</span></span>
+<span class="line"><span style="color:#A0A0A0">for</span><span style="color:#FFF"> s </span><span style="color:#A0A0A0">in</span><span style="color:#FFF"> $($VECS store list); </span><span style="color:#A0A0A0">do</span></span>
+<span class="line"><span style="color:#FFC799">  echo</span><span style="color:#99FFE4"> "=== STORE: </span><span style="color:#FFF">$s</span><span style="color:#99FFE4"> ==="</span></span>
+<span class="line"><span style="color:#FFF">  $VECS </span><span style="color:#99FFE4">entry</span><span style="color:#99FFE4"> list</span><span style="color:#99FFE4"> --store</span><span style="color:#99FFE4"> "</span><span style="color:#FFF">$s</span><span style="color:#99FFE4">"</span><span style="color:#99FFE4"> --text</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> egrep</span><span style="color:#99FFE4"> "Alias|Not After"</span></span>
+<span class="line"><span style="color:#A0A0A0">done</span></span></code></pre>
+<p>输出里重点看三类：业务证书存储、<code>MACHINE_SSL_CERT</code>、以及 <code>BACKUP_STORE</code>。STS 签名证书用厂商提供的检查脚本单独核对，它的有效期通常长得多，不必和业务证书混在一起处理。</p>
+<p>按剩余天数排优先级：备份存储最急（到期即告警）、业务证书次之、主机证书再次之。</p>
+<h3 id="第二步重签管理节点业务证书">第二步：重签管理节点业务证书</h3>
+<p>这一步用设备自带的证书管理器走“重置全部证书”分支，由 VMCA 重新签发所有业务证书，有效期默认顺延两年，过程中会自动重启全部服务。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">ssh</span><span style="color:#99FFE4"> root@vcenter-01</span><span style="color:#8B8B8B94">          # 走完整域名时可写 vcenter-01.example.com</span></span>
+<span class="line"><span style="color:#FFC799">/usr/lib/vmware-vmca/bin/certificate-manager</span></span></code></pre>
+<p>进入菜单后按提示交互，真正需要判断的输入只有几条：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>提示</th><th>输入</th></tr></thead><tbody><tr><td>是否使用配置文件生成证书</td><td>Y</td></tr><tr><td>SSO 管理员口令</td><td>按实际输入，终端不回显</td></tr><tr><td>IPAddress</td><td>直接回车，留空</td></tr><tr><td>Hostname</td><td>vCenter 的 FQDN，如 vcenter-01.example.com</td></tr><tr><td>VMCA Name</td><td>与 Hostname 完全一致</td></tr><tr><td>两次 Continue operation</td><td>均输入 Y</td></tr></tbody></table>
+<p>纯 IP 部署、没有 DNS 记录的环境，Hostname 一栏填管理地址即可，但要保证每次维护都保持同一套取值，不要在两种写法之间来回切换，否则证书主题会不一致。</p>
+<p>执行期间不要断开 SSH，不要重启虚拟机，不要对虚拟机做快照或迁移。等到命令行重新回到提示符，说明整个重签流程结束。</p>
+<h3 id="第三步清理备份证书存储">第三步：清理备份证书存储</h3>
+<p><code>BACKUP_STORE</code> 是每次证书更新时留下的历史副本。主证书续好了，这些旧副本到期依然会触发告警，必须显式删掉。清理动作只动历史备份，不影响在用证书，但操作前仍然建议留快照。</p>
+<p>优先使用厂商提供的清理脚本，上传到 <code>/tmp</code> 后执行。若脚本在 Windows 上编辑过，先转换换行符，否则会报 <code>bad interpreter</code>：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cd</span><span style="color:#99FFE4"> /tmp</span><span style="color:#FFF"> &#x26;&#x26; </span><span style="color:#FFC799">chmod</span><span style="color:#99FFE4"> +x</span><span style="color:#99FFE4"> clean_backup_stores.sh</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> -e</span><span style="color:#99FFE4"> 's/\r$//'</span><span style="color:#99FFE4"> clean_backup_stores.sh</span></span>
+<span class="line"><span style="color:#FFC799">./clean_backup_stores.sh</span></span>
+<span class="line"><span style="color:#FFC799">service-control</span><span style="color:#99FFE4"> --stop</span><span style="color:#99FFE4"> --all</span></span>
+<span class="line"><span style="color:#FFC799">service-control</span><span style="color:#99FFE4"> --start</span><span style="color:#99FFE4"> --all</span></span></code></pre>
+<p>拿不到脚本时就手动逐条删，思路是先列别名、再按别名删除：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFF">VECS</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">/usr/lib/vmware-vmafd/bin/vecs-cli</span></span>
+<span class="line"><span style="color:#FFF">$VECS entry list --store BACKUP_STORE --text </span><span style="color:#A0A0A0">|</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> Alias</span></span>
+<span class="line"><span style="color:#FFF">$VECS entry delete --store BACKUP_STORE --alias __MACHINE_CERT -y</span></span>
+<span class="line"><span style="color:#A0A0A0">for</span><span style="color:#FFF"> a </span><span style="color:#A0A0A0">in</span><span style="color:#99FFE4"> bkp_machine</span><span style="color:#99FFE4"> bkp_vpxd</span><span style="color:#99FFE4"> bkp_vsphere-webclient</span><span style="color:#99FFE4"> bkp_vpxd-extension</span><span style="color:#FFF">; </span><span style="color:#A0A0A0">do</span></span>
+<span class="line"><span style="color:#FFF">  $VECS </span><span style="color:#99FFE4">entry</span><span style="color:#99FFE4"> delete</span><span style="color:#99FFE4"> --store</span><span style="color:#99FFE4"> BACKUP_STORE</span><span style="color:#99FFE4"> --alias</span><span style="color:#99FFE4"> "</span><span style="color:#FFF">$a</span><span style="color:#99FFE4">"</span><span style="color:#99FFE4"> -y</span></span>
+<span class="line"><span style="color:#A0A0A0">done</span></span></code></pre>
+<p>删完再列一次，确认没有临近到期的条目。服务重启约需 5 至 10 分钟，期间管理平面不可用，但宿主机上运行的虚拟机不受影响。</p>
+<h3 id="第四步批量续订受管主机">第四步：批量续订受管主机</h3>
+<p>图形界面适合几十台以内的规模：进入集群的“配置 → 系统 → 证书”，勾选目标主机，执行“续订证书”。vCenter 会通过 VMCA 逐台签发并下发，管理链路只中断秒级，主机不需要重启。</p>
+<p>数量多时改用 PowerCLI，先连接、再逐个续订：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="powershell"><code><span class="line"><span style="color:#FFC799">Connect-VIServer</span><span style="color:#A0A0A0"> -</span><span style="color:#FFF">Server </span><span style="color:#FFC799">vcenter-01.example.com</span><span style="color:#A0A0A0"> -</span><span style="color:#FFF">Credential (</span><span style="color:#FFC799">Get-Credential</span><span style="color:#FFF">)</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#FFF">$targets </span><span style="color:#A0A0A0">=</span><span style="color:#FFC799"> @</span><span style="color:#FFF">(</span><span style="color:#99FFE4">'esxi-01'</span><span style="color:#A0A0A0">,</span><span style="color:#99FFE4">'esxi-02'</span><span style="color:#A0A0A0">,</span><span style="color:#99FFE4">'node-01'</span><span style="color:#FFF">)</span></span>
+<span class="line"><span style="color:#A0A0A0">foreach</span><span style="color:#FFF"> ($n </span><span style="color:#A0A0A0">in</span><span style="color:#FFF"> $targets) {</span></span>
+<span class="line"><span style="color:#FFF">    $h </span><span style="color:#A0A0A0">=</span><span style="color:#FFC799"> Get-VMHost</span><span style="color:#A0A0A0"> -</span><span style="color:#FFF">Name $n </span><span style="color:#A0A0A0">-</span><span style="color:#FFF">ErrorAction SilentlyContinue</span></span>
+<span class="line"><span style="color:#A0A0A0">    if</span><span style="color:#FFF"> ($h) { $h </span><span style="color:#A0A0A0">|</span><span style="color:#FFC799"> New-VMHostCertificate</span><span style="color:#FFF">; </span><span style="color:#FFC799">Write-Host</span><span style="color:#99FFE4"> "renewed: </span><span style="color:#FFF">$n</span><span style="color:#99FFE4">"</span><span style="color:#FFF"> }</span></span>
+<span class="line"><span style="color:#A0A0A0">    else</span><span style="color:#FFF">    { </span><span style="color:#FFC799">Write-Host</span><span style="color:#99FFE4"> "not found: </span><span style="color:#FFF">$n</span><span style="color:#99FFE4">"</span><span style="color:#A0A0A0"> -</span><span style="color:#FFF">ForegroundColor Red }</span></span>
+<span class="line"><span style="color:#FFF">}</span></span></code></pre>
+<p>界面与脚本都失败时，才考虑登录单台主机重生成自签名证书——代价是该主机不再由 VMCA 统一签发，后续信任链要单独维护：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">/sbin/generate-certificates</span></span>
+<span class="line"><span style="color:#FFC799">/etc/init.d/hostd</span><span style="color:#99FFE4"> restart</span></span>
+<span class="line"><span style="color:#FFC799">/etc/init.d/vpxa</span><span style="color:#99FFE4"> restart</span></span></code></pre>
+<p>完成后回到 vCenter，右键主机执行“连接”，重新建立信任关系。</p>
+<h2 id="验证">验证</h2>
+<ol>
+<li>全量复查证书存储，确认 vpxd、machine、vsphere-webclient、vpxd-extension 四类条目的到期时间都已顺延到两年后；</li>
+<li>复查 <code>BACKUP_STORE</code>，确认已无 30 天内到期的旧副本；</li>
+<li>运行 STS 检查脚本，确认签名链完整、无过期节点；</li>
+<li>逐台核对主机证书，剩余天数应回到 700 天以上；</li>
+<li>登录 vSphere Client，在“系统管理 → 证书 → 证书管理”做一次目视确认；</li>
+<li>到“监控 → 告警”筛选证书相关条目，逐条确认并重置为绿色，观察 24 小时不复现；</li>
+<li>确认服务状态全部正常、虚拟机无异常中断，最后删除快照。</li>
+</ol>
+<h2 id="风险与回滚">风险与回滚</h2>
+<p>主要风险集中在三处：整体重签期间管理平面不可用；服务启动失败导致 vCenter 无法登录；主机与 vCenter 的信任关系断裂。</p>
+<p>回滚判据要提前写清楚，出现下列任一情况立即回滚：重签报错且服务起不来、SSO 认证失败、主机大面积断连、业务虚拟机出现异常。回滚动作就是恢复操作前的快照，等虚拟机重启完成后用 <code>service-control --status --all</code> 确认服务状态。恢复快照会一并丢掉快照之后的配置变更，但宿主机上的虚拟机数据不受影响。</p>
+<p>主机侧的回滚成本很低：重启 hostd 与 vpxa 后重新连接即可；仍然不通时把主机移除后重新加入，前提是先置入维护模式。</p>
+<h2 id="常见问题">常见问题</h2>
+<ul>
+<li><strong>证书管理器报无法连接 Lookup Service</strong>：先确认 STS 与 SSO 服务状态。STS 过期会连带阻塞业务证书重签，需要先单独处理签名证书。</li>
+<li><strong>脚本报 bad interpreter: /bin/bash^M</strong>：换行符不兼容，用 <code>sed -i -e 's/\r$//'</code> 去掉行尾回车再执行。</li>
+<li><strong>续期后告警还在</strong>：多数是 <code>BACKUP_STORE</code> 没清，或告警没手动复位，两件事都要做。</li>
+<li><strong>个别 data-encipherment 证书始终不更新</strong>：该证书不走整体重置路径，需要按厂商专用脚本单独处理。</li>
+<li><strong>服务启动失败</strong>：先看 <code>/var/log/vmware/vmcad/certificate-manager.log</code> 与 <code>vmcad.log</code> 定位原因，不要盲目重试。</li>
+</ul> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/大文件跨环境传输应急/"> <span class="label">← 上一篇</span> <span class="title">大文件跨环境传输应急指引</span> </a> <a class="next" href="/2026/10/21/运维手册/esxi版本维护策略/"> <span class="label">下一篇 →</span> <span class="title">ESXi 大版本滚动升级与平台版本收敛</span> </a> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#第一步盘点到期面">第一步：盘点到期面</a></li><li class="depth-3"><a href="#第二步重签管理节点业务证书">第二步：重签管理节点业务证书</a></li><li class="depth-3"><a href="#第三步清理备份证书存储">第三步：清理备份证书存储</a></li><li class="depth-3"><a href="#第四步批量续订受管主机">第四步：批量续订受管主机</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

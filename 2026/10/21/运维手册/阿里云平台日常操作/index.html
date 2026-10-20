@@ -1,0 +1,335 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>阿里云平台日常运维操作手册 · ImsayingOhh</title><meta name="description" content="归纳公有云上资源创建、扩容、快照回滚、网络与负载均衡等日常操作的通用路径。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E9%98%BF%E9%87%8C%E4%BA%91%E5%B9%B3%E5%8F%B0%E6%97%A5%E5%B8%B8%E6%93%8D%E4%BD%9C/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="阿里云平台日常运维操作手册 · ImsayingOhh"><meta property="og:description" content="归纳公有云上资源创建、扩容、快照回滚、网络与负载均衡等日常操作的通用路径。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E9%98%BF%E9%87%8C%E4%BA%91%E5%B9%B3%E5%8F%B0%E6%97%A5%E5%B8%B8%E6%93%8D%E4%BD%9C/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.W5_X7z54.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑"> <a href="/">首页</a> <span>/</span> <a href="/archives/">文章</a> <span>/</span> <span aria-current="page">运维手册</span> </nav> <h1 class="post-title">阿里云平台日常运维操作手册</h1> <p class="post-desc">归纳公有云上资源创建、扩容、快照回滚、网络与负载均衡等日常操作的通用路径。</p> <div class="post-meta"> <time datetime="2026-10-21T02:40:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>7 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/%E9%98%BF%E9%87%8C%E4%BA%91/">阿里云</a><a class="tag" href="/tags/%E4%BA%91%E5%B9%B3%E5%8F%B0/">云平台</a><a class="tag" href="/tags/%E8%BF%90%E7%BB%B4/">运维</a> </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>这份手册只讲公有云上“日常要动手”的那部分事情：怎么开一台机器、怎么扩盘、怎么做快照和回滚、怎么开网络、怎么改负载均衡和数据库配置。涉及账号开通、费用结算、合同发票、内部审批的内容一律不在这里讨论，需要走各自的流程。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>新业务上线，需要在云上开出一批标准化的云主机。</li>
+<li>生产主机磁盘使用率逼近阈值，需要在业务低峰期做容量补充。</li>
+<li>变更前需要留一份可回滚的快照，或误操作后需要按快照恢复磁盘。</li>
+<li>需要为新增的服务器之间、服务器与数据库之间开通网络互访。</li>
+<li>负载均衡新增监听端口、更换证书、调整转发策略。</li>
+</ul>
+<h2 id="资源模型与原理">资源模型与原理</h2>
+<p>公有云把资源按“地域 — 可用区 — 专有网络 — 交换机 — 实例”逐层收敛。地域决定物理位置和可用产品，可用区是地域内的独立故障域，跨可用区部署是性价比最高的一种高可用手段。专有网络划出私有地址空间，交换机把地址空间切给不同子网，安全组则挂在实例上做实例级访问控制——安全组只认源地址，管不了访问来自哪个省份，需要按区域收敛时必须靠网络侧的边界设备。</p>
+<p>云盘与快照是“块设备 + 时间点副本”的关系：快照记录的是某个时刻磁盘块的状态，回滚会把整块盘退到那一刻，所以回滚前必须先对当前盘再打一份。负载均衡把前端监听映射到后端服务器组，证书挂在监听上；云数据库的白名单等价于实例级防火墙，不加就拿不到连接地址。</p>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>具备对应资源的操作权限，且操作已纳入变更窗口。</li>
+<li>明确目标地域、可用区、专有网络与交换机，避免资源开错网络。</li>
+<li>关键操作前完成快照，并确认快照进度为百分之百。</li>
+<li>命名规范统一：实例名、主机名、描述保持一致，便于定位。</li>
+</ul>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="1-创建云主机">1. 创建云主机</h3>
+<p>进入云服务器控制台创建实例。基础配置关注可用区、规格、镜像和磁盘类型；网络配置关注专有网络、交换机和安全组；系统配置关注登录凭证、实例名、主机名与描述。实例名与主机名建议完全一致，描述里写清业务与环境。确认订单前再核对一次规格与磁盘，避免开错后又要走变配。</p>
+<h3 id="2-系统初始化">2. 系统初始化</h3>
+<p>Linux 主机创建后先用控制台远程连接确认网络，再核对监听端口，随后按需调整远程登录端口并重启 SSH 服务。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> -4</span><span style="color:#99FFE4"> addr</span><span style="color:#99FFE4"> show</span></span>
+<span class="line"><span style="color:#FFC799">ss</span><span style="color:#99FFE4"> -ntlup</span></span>
+<span class="line"><span style="color:#FFC799">vi</span><span style="color:#99FFE4"> /etc/ssh/sshd_config</span><span style="color:#8B8B8B94">     # 修改 Port 与允许登录的用户</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> restart</span><span style="color:#99FFE4"> sshd</span></span>
+<span class="line"><span style="color:#FFC799">ss</span><span style="color:#99FFE4"> -ntlup</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> sshd</span></span></code></pre>
+<p>Windows 主机用镜像自带的初始化工具做一次封装，重启后确认远程桌面可达。自带防护软件是否保留按统一基线决定，不在单台机器上开例外。</p>
+<h3 id="3-安全组与互访">3. 安全组与互访</h3>
+<p>安全组规则分入方向和出方向，出方向通常放行全部，入方向只开必要端口。新增互访时按“源地址 + 协议 + 端口”三元组加规则，并在描述里写明用途与变更记录编号，方便日后清理。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 示例：仅允许来自 192.0.2.0/24 的 3306 访问</span></span>
+<span class="line"><span style="color:#8B8B8B94"># 控制台操作：安全组 - 配置规则 - 入方向 - 添加</span></span></code></pre>
+<p>禁止使用 0.0.0.0/0 敞开通用的管理端口；需要按区域收敛时，由网络侧边界设备负责，安全组只做端口粒度的收敛。</p>
+<h3 id="4-磁盘扩容">4. 磁盘扩容</h3>
+<p>生产主机优先采用“新增一块云盘”的方式扩容，在线即可完成，不触碰原有分区与文件系统。原盘扩容会改动分区表与文件系统，操作失误可能损失整盘数据，只在新建主机阶段推荐。</p>
+<p>原盘扩容的标准顺序是：先做快照，再在控制台完成云盘扩容，最后进系统扩展分区与文件系统。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">lsblk</span></span>
+<span class="line"><span style="color:#FFC799">df</span><span style="color:#99FFE4"> -Th</span></span>
+<span class="line"><span style="color:#FFC799">fdisk</span><span style="color:#99FFE4"> -lu</span><span style="color:#99FFE4"> /dev/vdb</span><span style="color:#8B8B8B94">          # 确认分区表格式是否为 MBR</span></span>
+<span class="line"><span style="color:#FFC799">growpart</span><span style="color:#99FFE4"> /dev/vdb</span><span style="color:#FFC799"> 1</span><span style="color:#8B8B8B94">         # 扩展分区（GPT 场景参数一致）</span></span>
+<span class="line"><span style="color:#FFC799">xfs_growfs</span><span style="color:#99FFE4"> /data</span><span style="color:#8B8B8B94">            # xfs 用这个；ext4 用 resize2fs /dev/vdb1</span></span>
+<span class="line"><span style="color:#FFC799">df</span><span style="color:#99FFE4"> -h</span></span></code></pre>
+<p>新增云盘则简单得多：挂载到目标目录，写入 fstab 时务必带 <code>nofail</code>，避免磁盘异常导致主机起不来。</p>
+<h3 id="5-快照与回滚">5. 快照与回滚</h3>
+<p>自动快照策略适合做兜底：先建策略，再把一批云盘批量关联到策略上，最后在策略详情里核对关联盘数量是否与预期一致，数量对不上说明有盘漏挂。</p>
+<p>临时快照用于变更前留档，命名建议“服务器名 + 变更记录编号 + 时间”，需要长期保留的在名称里标注保留期。回滚磁盘必须先停机，且回滚前对当前盘再做一份快照，保留期按七天到十五天设置。</p>
+<h3 id="6-变配换系统与回收">6. 变配、换系统与回收</h3>
+<p>变更 CPU 内存、更换操作系统、回收实例都属于影响业务的操作。升级配置一般需要重启，降级配置需要先关机，所以先与业务方约时间。更换系统本质是重装，务必确认数据盘与系统盘的关系，不要把数据盘一并重置。</p>
+<p>回收实例前先做永久快照，确认已关机、无业务访问后再释放。释放不可逆，公网地址与实例元数据都会随之消失。</p>
+<h3 id="7-负载均衡">7. 负载均衡</h3>
+<p>新增监听时按四段配置推进：协议与监听（端口、调度算法、会话保持、访问控制）、证书（HTTPS 必须挂证书并选安全策略）、后端服务器组、健康检查。变更监听协议需要先删旧监听再建新监听，删除前把原配置截图存档，事后逐项比对新旧差异再通知业务验证。</p>
+<p>变更前端端口号时更稳妥的做法是“先加后删”：新增监听端口、保留旧端口，业务验证通过后再停用并删除旧监听。更换证书支持直接替换，替换窗口内新旧证书可能并存，务必在低峰操作。</p>
+<h3 id="8-云数据库">8. 云数据库</h3>
+<p>白名单分组按“业务 + 变更记录编号 + 日期”命名，添加前先用搜索确认地址是否已在别的分组里，避免重复。修改参数前先确认该参数是否要求重启实例，这一步要在变更评审阶段就写清楚；提交参数后由业务侧验证。</p>
+<p>扩容存储空间后不可回退，云盘类型的规格变更通常对业务无感，本地盘类型会有闪断。变更实例规格的耗时与负载、库表数量相关，连接会出现短时中断，应用侧必须具备重连能力。主实例磁盘不应小于只读实例。</p>
+<h3 id="9-对象存储与域名">9. 对象存储与域名</h3>
+<p>创建存储桶时关注地域、存储类型、读写权限、版本控制与服务端加密。生产桶默认私有读写，日志转存单独开启。生命周期规则用于成本治理，比如临时转储目录按十五天过期删除。负载均衡上的证书改完后，同步检查 Web 应用防火墙侧的站点证书。</p>
+<p>域名侧常见操作是新增二级域名、修改解析记录值。解析生效受 TTL 影响，变更前把 TTL 调小，切完再调回。</p>
+<h2 id="验证">验证</h2>
+<ul>
+<li>主机开机后用控制台远程连接确认登录、时区、主机名、磁盘挂载与预期一致。</li>
+<li>安全组改动后用 <code>telnet</code> 或 <code>nc</code> 从另一台机器验证目标端口连通性。</li>
+<li>扩容后 <code>df -h</code> 与 <code>lsblk</code> 的容量同时变化，且业务写入正常。</li>
+<li>快照在快照列表中显示为百分之百完成，且可点开查看详情。</li>
+<li>负载均衡监听状态为运行中，后端健康检查正常，业务域名访问返回预期状态码。</li>
+<li>数据库变配完成后确认连接地址未变、参数已生效、监控无异常抖动。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>操作</th><th>影响</th><th>回滚手段</th></tr></thead><tbody><tr><td>云盘在线扩容</td><td>分区与文件系统变更，误操作可能丢数据</td><td>变更前的快照回滚</td></tr><tr><td>磁盘回滚</td><td>数据退回到快照时刻</td><td>回滚前再打快照，可二次回滚</td></tr><tr><td>更换操作系统</td><td>系统盘被重置</td><td>保留系统盘快照，重新挂载数据盘</td></tr><tr><td>实例规格变更</td><td>重启或短时中断</td><td>变回原规格，注意需要再次重启</td></tr><tr><td>数据库规格变更</td><td>连接闪断</td><td>变回原规格，业务侧重连</td></tr><tr><td>负载均衡删监听</td><td>该端口业务中断</td><td>按截图存档重建监听</td></tr></tbody></table>
+<p>原则只有一条：所有不可逆动作之前，先有一份可回滚的时间点副本。</p>
+<h2 id="常见问题">常见问题</h2>
+<p><strong>新机器连不上。</strong> 先看安全组入方向是否放行，再看实例内防火墙与监听地址，最后确认是否绑定了公网地址或走了跳板。</p>
+<p><strong>扩容后 <code>df -h</code> 容量没变。</strong> 控制台只是扩大了块设备，还需要在系统内扩展分区和文件系统。</p>
+<p><strong>快照显示已完成但回滚失败。</strong> 检查实例是否已完全关机，以及该盘是否被其他实例挂载。</p>
+<p><strong>数据库连不上。</strong> 白名单没加、用了公网而非私网地址、账号未授权，按这三项依次排查。</p>
+<p><strong>负载均衡后端全部不健康。</strong> 健康检查端口与路径是否与后端一致，安全组是否放行了来自负载均衡网段的探测流量。</p> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/zabbix监控与告警配置/"> <span class="label">← 上一篇</span> <span class="title">Zabbix 监控与告警配置手册</span> </a> <a class="next" href="/2026/10/21/运维手册/大文件跨环境传输应急/"> <span class="label">下一篇 →</span> <span class="title">大文件跨环境传输应急指引</span> </a> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#资源模型与原理">资源模型与原理</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#1-创建云主机">1. 创建云主机</a></li><li class="depth-3"><a href="#2-系统初始化">2. 系统初始化</a></li><li class="depth-3"><a href="#3-安全组与互访">3. 安全组与互访</a></li><li class="depth-3"><a href="#4-磁盘扩容">4. 磁盘扩容</a></li><li class="depth-3"><a href="#5-快照与回滚">5. 快照与回滚</a></li><li class="depth-3"><a href="#6-变配换系统与回收">6. 变配、换系统与回收</a></li><li class="depth-3"><a href="#7-负载均衡">7. 负载均衡</a></li><li class="depth-3"><a href="#8-云数据库">8. 云数据库</a></li><li class="depth-3"><a href="#9-对象存储与域名">9. 对象存储与域名</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>
