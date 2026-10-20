@@ -1,0 +1,530 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RKE2 高可用集群离线部署 · ImsayingOhh</title><meta name="description" content="内网离线环境搭建 RKE2 高可用集群的完整流程，含私有仓库、控制面注册与入口负载均衡。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/rke2%E9%9B%86%E7%BE%A4%E9%83%A8%E7%BD%B2/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="RKE2 高可用集群离线部署 · ImsayingOhh"><meta property="og:description" content="内网离线环境搭建 RKE2 高可用集群的完整流程，含私有仓库、控制面注册与入口负载均衡。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/rke2%E9%9B%86%E7%BE%A4%E9%83%A8%E7%BD%B2/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/container/">容器与云原生</a>  </nav> <h1 class="post-title">RKE2 高可用集群离线部署</h1> <p class="post-desc">内网离线环境搭建 RKE2 高可用集群的完整流程，含私有仓库、控制面注册与入口负载均衡。</p> <div class="post-meta"> <time datetime="2026-10-21T06:40:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>8 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/RKE2/">RKE2</a><a class="tag" href="/tags/%E5%9B%BD%E4%BA%A7%E5%8C%96/">国产化</a><a class="tag" href="/tags/%E9%9B%86%E7%BE%A4%E9%83%A8%E7%BD%B2/">集群部署</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/container/">容器与云原生</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>在节点无法访问公网的内网环境里，用离线包从零搭起一套 RKE2 高可用集群，再把容器管理平台以固定域名暴露给使用者。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>生产内网或专网，节点到公网镜像仓库不通。</li>
+<li>国产化操作系统上部署容器平台，需要按发行版调整安全策略与内核参数。</li>
+<li>单机版容器环境要升级成三节点控制面，消除单点。</li>
+<li>新机房或容灾分区复制一套标准集群底座。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>角色规划：三台管理节点 node-01 至 node-03 同时承担控制面与 etcd，若干工作节点，两台入口负载均衡，一台跳板机负责分发文件与执行部署。</li>
+<li>操作系统已安装完成，root 可登录，磁盘按规划分好数据盘。</li>
+<li>离线物料齐全：安装脚本、镜像包与校验文件、平台 Helm Chart、私有仓库离线安装包。</li>
+<li>私有仓库可访问，所有节点都能连通 registry-a.example.com。</li>
+<li>平台域名已解析到负载均衡 VIP，证书与私钥已签发。</li>
+<li>各节点时间同步正常，偏差控制在秒级。</li>
+</ul>
+<p>端口按最小必要开放：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>端口</th><th>用途</th><th>开放范围</th></tr></thead><tbody><tr><td>6443</td><td>集群 API</td><td>管理节点、跳板机、负载均衡</td></tr><tr><td>9345</td><td>节点注册</td><td>仅管理节点之间</td></tr><tr><td>2379–2380</td><td>etcd 通信</td><td>仅管理节点之间</td></tr><tr><td>10250</td><td>kubelet</td><td>集群内网</td></tr><tr><td>30080</td><td>平台 Web 入口</td><td>负载均衡节点</td></tr><tr><td>80/443</td><td>对外域名</td><td>业务网段</td></tr></tbody></table>
+<h2 id="架构与原理">架构与原理</h2>
+<p>RKE2 把 etcd、控制面组件、kubelet 与容器运行时收进一个 systemd 服务，节点上不再单独跑 docker，少一层依赖。首个管理节点以 server 角色启动，自行拉起 etcd 并生成集群凭据；第二、第三个管理节点带着同一份凭据，通过 9345 端口注册进控制面，组成三副本 etcd。工作节点只跑 kubelet 与运行时，也可以交给平台侧按注册命令纳管。</p>
+<p>离线部署的关键是断掉运行时的公网依赖。安装脚本与镜像包放固定目录，安装时把镜像导入内置的 containerd 镜像库；节点上的仓库配置文件再把上游地址重写到私有仓库。平台 Chart 与其中引用的镜像同样要提前推一份到私有仓库，安装时用统一仓库参数指过去，否则 Pod 会停在镜像拉取失败。</p>
+<p>高可用分两层：控制面靠三台管理节点加 etcd 副本，入口靠两台负载均衡加 keepalived 漂移 VIP，nginx 把请求反代到各管理节点的 NodePort。</p>
+<h2 id="操作步骤">操作步骤</h2>
+<ol>
+<li>
+<p>准备私有仓库。离线安装仓库服务，建好项目，按镜像清单把平台与业务镜像逐个推上去，推完在页面核对项目大小和标签数，缺一个都会在部署时卡住。</p>
+</li>
+<li>
+<p>系统初始化，所有节点执行。关掉防火墙与安全策略，关闭交换分区，统一字符集。</p>
+</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> disable</span><span style="color:#99FFE4"> --now</span><span style="color:#99FFE4"> firewalld</span></span>
+<span class="line"><span style="color:#FFC799">setenforce</span><span style="color:#FFC799"> 0</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's/^SELINUX=enforcing$/SELINUX=disabled/'</span><span style="color:#99FFE4"> /etc/selinux/config</span></span>
+<span class="line"><span style="color:#FFC799">swapoff</span><span style="color:#99FFE4"> -a</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '/ swap / s/^/# /'</span><span style="color:#99FFE4"> /etc/fstab</span></span>
+<span class="line"><span style="color:#FFC799">localectl</span><span style="color:#99FFE4"> set-locale</span><span style="color:#99FFE4"> LANG=en_US.UTF-8</span></span></code></pre>
+<ol start="3">
+<li>加载内核模块。容器网络与转发依赖的几个模块要开机自动加载。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/modules-load.d/rke2.conf</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">overlay</span></span>
+<span class="line"><span style="color:#99FFE4">br_netfilter</span></span>
+<span class="line"><span style="color:#99FFE4">veth</span></span>
+<span class="line"><span style="color:#99FFE4">nf_conntrack</span></span>
+<span class="line"><span style="color:#99FFE4">ip_tables</span></span>
+<span class="line"><span style="color:#99FFE4">ip6_tables</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> restart</span><span style="color:#99FFE4"> systemd-modules-load.service</span></span></code></pre>
+<ol start="4">
+<li>内核参数与句柄。写成一个独立文件，避免逐条追加到系统总配置里产生重复项。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/sysctl.d/90-rke2.conf</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">net.ipv4.ip_forward=1</span></span>
+<span class="line"><span style="color:#99FFE4">net.bridge.bridge-nf-call-iptables=1</span></span>
+<span class="line"><span style="color:#99FFE4">net.bridge.bridge-nf-call-ip6tables=1</span></span>
+<span class="line"><span style="color:#99FFE4">vm.swappiness=0</span></span>
+<span class="line"><span style="color:#99FFE4">vm.max_map_count=262144</span></span>
+<span class="line"><span style="color:#99FFE4">fs.file-max=2097152</span></span>
+<span class="line"><span style="color:#99FFE4">fs.inotify.max_user_watches=524288</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#FFC799">sysctl</span><span style="color:#99FFE4"> --system</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/security/limits.conf</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">* soft nofile 655350</span></span>
+<span class="line"><span style="color:#99FFE4">* hard nofile 655350</span></span>
+<span class="line"><span style="color:#99FFE4">* soft nproc unlimited</span></span>
+<span class="line"><span style="color:#99FFE4">* hard nproc unlimited</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span></code></pre>
+<p>改完重启一次，让参数彻底生效。</p>
+<ol start="5">
+<li>数据盘与日志盘。集群状态、镜像、日志缓冲都放独立盘，根分区写满会直接拖垮控制面。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">mkfs.xfs</span><span style="color:#99FFE4"> -f</span><span style="color:#99FFE4"> /dev/vdb</span></span>
+<span class="line"><span style="color:#FFC799">mkdir</span><span style="color:#99FFE4"> -p</span><span style="color:#99FFE4"> /var/lib/rancher</span></span>
+<span class="line"><span style="color:#FFC799">echo</span><span style="color:#99FFE4"> "UUID=$(</span><span style="color:#FFC799">blkid</span><span style="color:#99FFE4"> -s UUID -o value /dev/vdb) /var/lib/rancher xfs defaults 0 0"</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/fstab</span></span>
+<span class="line"><span style="color:#FFC799">mount</span><span style="color:#99FFE4"> -a</span></span>
+<span class="line"><span style="color:#FFC799">df</span><span style="color:#99FFE4"> -hT</span><span style="color:#99FFE4"> /var/lib/rancher</span></span></code></pre>
+<p>日志盘同理挂到 <code>/var/lib/rancher/fluentd/log</code>，在工作节点上给出写权限。</p>
+<ol start="6">
+<li>网络接口与 bpffs。让 NetworkManager 忽略 CNI 创建的虚拟网卡，否则节点重启后网络插件可能接管失败。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/NetworkManager/conf.d/rke2-interface.conf</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">[keyfile]</span></span>
+<span class="line"><span style="color:#99FFE4">unmanaged-devices=interface-name:cali*;interface-name:flannel*;interface-name:cilium*</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> reload</span><span style="color:#99FFE4"> NetworkManager</span></span>
+<span class="line"><span style="color:#FFC799">mount</span><span style="color:#99FFE4"> bpffs</span><span style="color:#99FFE4"> /sys/fs/bpf</span><span style="color:#99FFE4"> -t</span><span style="color:#99FFE4"> bpf</span></span>
+<span class="line"><span style="color:#FFC799">echo</span><span style="color:#99FFE4"> 'bpffs /sys/fs/bpf bpf defaults 0 0'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/fstab</span></span></code></pre>
+<ol start="7">
+<li>下发离线物料。镜像包放固定目录，安装脚本单独放一个工作目录，各节点路径保持一致。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">mkdir</span><span style="color:#99FFE4"> -p</span><span style="color:#99FFE4"> /var/lib/rancher/rke2/agent/images</span><span style="color:#99FFE4"> /root/rke</span></span>
+<span class="line"><span style="color:#8B8B8B94"># 镜像包与校验文件放入 images 目录，安装脚本放到 /root/rke/install.sh</span></span>
+<span class="line"><span style="color:#FFC799">ls</span><span style="color:#99FFE4"> -lh</span><span style="color:#99FFE4"> /var/lib/rancher/rke2/agent/images</span><span style="color:#99FFE4"> /root/rke</span></span></code></pre>
+<p>分发后核对各节点文件校验值，不一致的重传。</p>
+<ol start="8">
+<li>配置仓库重写，让上游地址全部指向本地仓库。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="yaml"><code><span class="line"><span style="color:#FFC799">mirrors</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  docker.io</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">    endpoint</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFF">      - </span><span style="color:#99FFE4">"https://registry-a.example.com"</span></span>
+<span class="line"><span style="color:#FFC799">  registry.k8s.io</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">    endpoint</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFF">      - </span><span style="color:#99FFE4">"https://registry-a.example.com"</span></span>
+<span class="line"><span style="color:#FFC799">configs</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#99FFE4">  "registry-a.example.com"</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">    tls</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">      insecure_skip_verify</span><span style="color:#FFF">: </span><span style="color:#FFC799">true</span></span></code></pre>
+<p>保存为 <code>/etc/rancher/rke2/registries.yaml</code>，权限设 600。仓库认证信息由部署脚本从凭据管理系统读取后写入同一文件，不进版本库，也不留在命令历史里。</p>
+<ol start="9">
+<li>首节点安装。写好集群凭据与证书备用域名后启动服务，等控制面组件全部起来再往下走。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/rancher/rke2/config.yaml</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">token: "&#x3C;cluster-token>"</span></span>
+<span class="line"><span style="color:#99FFE4">tls-san:</span></span>
+<span class="line"><span style="color:#99FFE4">  - "rancher.example.com"</span></span>
+<span class="line"><span style="color:#99FFE4">  - "192.0.2.10"</span></span>
+<span class="line"><span style="color:#99FFE4">  - "192.0.2.11"</span></span>
+<span class="line"><span style="color:#99FFE4">  - "192.0.2.12"</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#A0A0A0">export</span><span style="color:#FFF"> INSTALL_RKE2_ARTIFACT_PATH</span><span style="color:#A0A0A0">=</span><span style="color:#FFF">/var/lib/rancher/rke2/agent/images</span></span>
+<span class="line"><span style="color:#FFC799">sh</span><span style="color:#99FFE4"> /root/rke/install.sh</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> enable</span><span style="color:#99FFE4"> --now</span><span style="color:#99FFE4"> rke2-server.service</span></span>
+<span class="line"><span style="color:#FFC799">journalctl</span><span style="color:#99FFE4"> -u</span><span style="color:#99FFE4"> rke2-server</span><span style="color:#99FFE4"> -f</span></span></code></pre>
+<p>补一次 PATH 与 kubectl 变量，后续排查会一直用到：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">echo</span><span style="color:#99FFE4"> 'export PATH=$PATH:/var/lib/rancher/rke2/bin'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> ~/.bashrc</span></span>
+<span class="line"><span style="color:#FFC799">echo</span><span style="color:#99FFE4"> 'export KUBECONFIG=/etc/rancher/rke2/rke2.yaml'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> ~/.bashrc</span></span>
+<span class="line"><span style="color:#FFC799">source</span><span style="color:#99FFE4"> ~/.bashrc</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> nodes</span></span></code></pre>
+<ol start="10">
+<li>另两个管理节点注册。配置文件多一行 server 指向首节点的 9345 端口，其余保持一致。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/rancher/rke2/config.yaml</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">server: "https://192.0.2.10:9345"</span></span>
+<span class="line"><span style="color:#99FFE4">token: "&#x3C;cluster-token>"</span></span>
+<span class="line"><span style="color:#99FFE4">tls-san:</span></span>
+<span class="line"><span style="color:#99FFE4">  - "rancher.example.com"</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#A0A0A0">export</span><span style="color:#FFF"> INSTALL_RKE2_ARTIFACT_PATH</span><span style="color:#A0A0A0">=</span><span style="color:#FFF">/var/lib/rancher/rke2/agent/images</span></span>
+<span class="line"><span style="color:#FFC799">sh</span><span style="color:#99FFE4"> /root/rke/install.sh</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> enable</span><span style="color:#99FFE4"> --now</span><span style="color:#99FFE4"> rke2-server.service</span></span></code></pre>
+<ol start="11">
+<li>部署平台。Chart 与镜像都走私有仓库，审计日志落宿主机目录并限制保留天数。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#A0A0A0">export</span><span style="color:#FFF"> PLATFORM_HOST</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">"rancher.example.com"</span></span>
+<span class="line"><span style="color:#A0A0A0">export</span><span style="color:#FFF"> REGISTRY</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">"registry-a.example.com"</span></span>
+<span class="line"><span style="color:#FFC799">helm</span><span style="color:#99FFE4"> repo</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> platform</span><span style="color:#99FFE4"> https://charts.example.com/server-charts/stable</span></span>
+<span class="line"><span style="color:#FFC799">helm</span><span style="color:#99FFE4"> pull</span><span style="color:#99FFE4"> platform/platform</span><span style="color:#99FFE4"> --version</span><span style="color:#FFC799"> 2.10.2</span></span>
+<span class="line"><span style="color:#FFC799">tar</span><span style="color:#99FFE4"> -xzvf</span><span style="color:#99FFE4"> platform-2.10.2.tgz</span></span>
+<span class="line"><span style="color:#FFC799">helm</span><span style="color:#99FFE4"> upgrade</span><span style="color:#99FFE4"> --install</span><span style="color:#99FFE4"> platform</span><span style="color:#99FFE4"> ./platform</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --namespace</span><span style="color:#99FFE4"> cattle-system</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --create-namespace</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> hostname="${</span><span style="color:#FFF">PLATFORM_HOST</span><span style="color:#99FFE4">}"</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> tls=external</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> auditLog.destination=hostPath</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> auditLog.level=</span><span style="color:#FFC799">3</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> auditLog.maxAge=</span><span style="color:#FFC799">7</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> systemDefaultRegistry="${</span><span style="color:#FFF">REGISTRY</span><span style="color:#99FFE4">}"</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --set</span><span style="color:#99FFE4"> useBundledSystemChart=true</span></span></code></pre>
+<p>初始管理员口令不写进命令行，按平台的一次性初始化流程设置。</p>
+<ol start="12">
+<li>暴露平台入口。平台装完只有集群内地址，先在平台命名空间建一个 NodePort 类型服务，把 80 端口固定映射到 30080，负载均衡再指向这个端口。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="yaml"><code><span class="line"><span style="color:#FFC799">apiVersion</span><span style="color:#FFF">: </span><span style="color:#99FFE4">v1</span></span>
+<span class="line"><span style="color:#FFC799">kind</span><span style="color:#FFF">: </span><span style="color:#99FFE4">Service</span></span>
+<span class="line"><span style="color:#FFC799">metadata</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  name</span><span style="color:#FFF">: </span><span style="color:#99FFE4">platform-nodeport</span></span>
+<span class="line"><span style="color:#FFC799">  namespace</span><span style="color:#FFF">: </span><span style="color:#99FFE4">cattle-system</span></span>
+<span class="line"><span style="color:#FFC799">spec</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">  type</span><span style="color:#FFF">: </span><span style="color:#99FFE4">NodePort</span></span>
+<span class="line"><span style="color:#FFC799">  selector</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFC799">    app</span><span style="color:#FFF">: </span><span style="color:#99FFE4">platform</span></span>
+<span class="line"><span style="color:#FFC799">  ports</span><span style="color:#FFF">:</span></span>
+<span class="line"><span style="color:#FFF">    - </span><span style="color:#FFC799">port</span><span style="color:#FFF">: </span><span style="color:#FFC799">80</span></span>
+<span class="line"><span style="color:#FFC799">      targetPort</span><span style="color:#FFF">: </span><span style="color:#FFC799">80</span></span>
+<span class="line"><span style="color:#FFC799">      nodePort</span><span style="color:#FFF">: </span><span style="color:#FFC799">30080</span></span>
+<span class="line"><span style="color:#FFC799">      protocol</span><span style="color:#FFF">: </span><span style="color:#99FFE4">TCP</span></span></code></pre>
+<ol start="13">
+<li>入口负载均衡。两台负载均衡装 nginx 与 keepalived，VIP 为 192.0.2.100，nginx 把域名反代到各管理节点的 NodePort。</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="nginx"><code><span class="line"><span style="color:#A0A0A0">upstream</span><span style="color:#FFC799"> platform </span><span style="color:#FFF">{</span></span>
+<span class="line"><span style="color:#A0A0A0">    server</span><span style="color:#FFF"> 192.0.2.10:30080 max_fails</span><span style="color:#A0A0A0">=</span><span style="color:#FFC799">3</span><span style="color:#FFF"> fail_timeout=5s;</span></span>
+<span class="line"><span style="color:#A0A0A0">    server</span><span style="color:#FFF"> 192.0.2.11:30080 max_fails</span><span style="color:#A0A0A0">=</span><span style="color:#FFC799">3</span><span style="color:#FFF"> fail_timeout=5s;</span></span>
+<span class="line"><span style="color:#A0A0A0">    server</span><span style="color:#FFF"> 192.0.2.12:30080 max_fails</span><span style="color:#A0A0A0">=</span><span style="color:#FFC799">3</span><span style="color:#FFF"> fail_timeout=5s;</span></span>
+<span class="line"><span style="color:#FFF">}</span></span>
+<span class="line"><span style="color:#A0A0A0">server</span><span style="color:#FFF"> {</span></span>
+<span class="line"><span style="color:#A0A0A0">    listen </span><span style="color:#FFC799">443</span><span style="color:#FFF"> ssl http2;</span></span>
+<span class="line"><span style="color:#A0A0A0">    server_name </span><span style="color:#FFF">rancher.example.com;</span></span>
+<span class="line"><span style="color:#A0A0A0">    location</span><span style="color:#FFC799"> / </span><span style="color:#FFF">{</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_set_header </span><span style="color:#FFF">Host $host;</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_set_header </span><span style="color:#FFF">X-Forwarded-Proto $scheme;</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_pass </span><span style="color:#FFF">http://platform;</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_http_version </span><span style="color:#FFC799">1.1</span><span style="color:#FFF">;</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_set_header </span><span style="color:#FFF">Upgrade $http_upgrade;</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_set_header </span><span style="color:#FFF">Connection </span><span style="color:#99FFE4">"upgrade"</span><span style="color:#FFF">;</span></span>
+<span class="line"><span style="color:#A0A0A0">        proxy_read_timeout </span><span style="color:#FFC799">900s</span><span style="color:#FFF">;</span></span>
+<span class="line"><span style="color:#FFF">    }</span></span>
+<span class="line"><span style="color:#FFF">}</span></span></code></pre>
+<p>两份 keepalived 配置只差 state 与 priority，VIP 用同一地址；健康检查脚本探测本机 443 端口，连续失败三次就降权让出 VIP。</p>
+<h2 id="验证">验证</h2>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> nodes</span><span style="color:#99FFE4"> -o</span><span style="color:#99FFE4"> wide</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> pods</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> kube-system</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> pods</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> cattle-system</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> kube-system</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> pods</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> -E</span><span style="color:#99FFE4"> 'etcd|kube-apiserver'</span></span>
+<span class="line"><span style="color:#FFC799">curl</span><span style="color:#99FFE4"> -sk</span><span style="color:#99FFE4"> -o</span><span style="color:#99FFE4"> /dev/null</span><span style="color:#99FFE4"> -w</span><span style="color:#99FFE4"> "%{http_code}\n"</span><span style="color:#99FFE4"> https://rancher.example.com/</span></span>
+<span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> a</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> -w</span><span style="color:#FFC799"> 192.0.2.100</span></span></code></pre>
+<ul>
+<li>三台管理节点均为 Ready，etcd 成员数为三。</li>
+<li>平台命名空间下的 Pod 全部 Running，重启次数稳定。</li>
+<li>域名与 VIP 都返回 200；手动停掉主负载均衡，VIP 在备用节点接管。</li>
+<li>随机重启一台工作节点，节点能自动回到集群并恢复调度。</li>
+<li>再拉一个新镜像，确认走的是私有仓库而不是公网。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li>镜像包不完整时安装会中途失败，节点留下半成品。重装前先清理 <code>/var/lib/rancher/rke2</code> 与对应 systemd 单元，再重新执行。</li>
+<li>控制面节点不能同时维护，一次只动一台，确认 etcd 成员健康后再动下一台。</li>
+<li>删集群会连带删业务数据，动手前确认上面没有仍在运行的工作负载，并留好备份。</li>
+<li>改完仓库配置要重启服务才生效，重启会短暂中断该节点上的容器，挑业务低峰做。</li>
+<li>keepalived 的 VIP 与业务网段地址冲突会导致整段网络异常，上线前用 arping 探测一遍。</li>
+<li>数据盘没写进 fstab，重启后目录回到根分区，轻则磁盘告警重则控制面写满退出；恢复挂载后重启服务即可。</li>
+<li>回滚思路：保留旧版本 Chart 与旧 config.yaml，出问题时按原参数重装对应节点，不要在多节点上同时操作。</li>
+</ul>
+<h2 id="常见问题">常见问题</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>现象</th><th>常见原因</th><th>处理思路</th></tr></thead><tbody><tr><td>节点一直 NotReady</td><td>网络插件未就绪或内核模块缺失</td><td>查 kube-system 日志与模块加载</td></tr><tr><td>Pod 卡在 ImagePullBackOff</td><td>仓库重写未生效或缺认证</td><td>核对 registries.yaml 与仓库连通性</td></tr><tr><td>第二节点注册失败</td><td>凭据或 server 地址不对，9345 不通</td><td>核对配置文件与端口策略</td></tr><tr><td>etcd 只有两个成员</td><td>第三节点注册后未同步完成</td><td>查 etcd 日志与磁盘 IO</td></tr><tr><td>平台域名 502</td><td>NodePort 不通或后端地址写错</td><td>先在负载均衡上 curl 各节点端口</td></tr><tr><td>VIP 不漂移</td><td>keepalived 未开机自启或脚本无执行权限</td><td>检查服务状态与脚本权限</td></tr><tr><td>节点重启后丢数据盘</td><td>fstab 未写或 UUID 写错</td><td>用 blkid 核对后重写并 mount -a</td></tr></tbody></table> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/rancher工作负载标准化/"> <span class="label">← 上一篇</span> <span class="title">Rancher 工作负载标准化配置</span> </a> <a class="next" href="/2026/10/21/运维手册/vsphere日常运维/"> <span class="label">下一篇 →</span> <span class="title">vSphere 日常运维与虚拟机全生命周期管理</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「容器与云原生」其他文档</p> <ul> <li><a href="/2026/10/21/运维手册/velero备份与恢复/">Velero 容器备份与恢复实践</a></li><li><a href="/2026/10/21/运维手册/trident-csi容器存储/">Trident CSI 容器存储接入手册</a></li><li><a href="/2026/10/21/运维手册/k8s集群新增节点初始化/">K8s 集群新增节点初始化清单</a></li><li><a href="/2026/10/21/运维手册/rancher工作负载标准化/">Rancher 工作负载标准化配置</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#架构与原理">架构与原理</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

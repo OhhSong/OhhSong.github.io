@@ -1,0 +1,338 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ubuntu 22.04 安装 NVIDIA 驱动与 CUDA 11.8 · ImsayingOhh</title><meta name="description" content="从驱动匹配、屏蔽 nouveau 到直通显卡与验证，讲清 Ubuntu 装 CUDA 的顺序。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/ubuntu-cuda%E9%83%A8%E7%BD%B2/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="Ubuntu 22.04 安装 NVIDIA 驱动与 CUDA 11.8 · ImsayingOhh"><meta property="og:description" content="从驱动匹配、屏蔽 nouveau 到直通显卡与验证，讲清 Ubuntu 装 CUDA 的顺序。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/ubuntu-cuda%E9%83%A8%E7%BD%B2/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/os-security/">操作系统与安全基线</a>  </nav> <h1 class="post-title">Ubuntu 22.04 安装 NVIDIA 驱动与 CUDA 11.8</h1> <p class="post-desc">从驱动匹配、屏蔽 nouveau 到直通显卡与验证，讲清 Ubuntu 装 CUDA 的顺序。</p> <div class="post-meta"> <time datetime="2026-10-21T09:40:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>6 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/Ubuntu/">Ubuntu</a><a class="tag" href="/tags/NVIDIA/">NVIDIA</a><a class="tag" href="/tags/CUDA/">CUDA</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/os-security/">操作系统与安全基线</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>在虚拟化平台上给虚拟机直通一块显卡并装好 CUDA，难点不在命令，而在顺序与版本：驱动和 toolkit 要匹配，nouveau 要先让位，PCI 设备要在关机状态下添加，最后才是环境变量与验证。顺序乱一步，后面所有报错都会指向错误的方向。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>新建 GPU 虚拟机（推理、训练、图形计算）的初始化；</li>
+<li>已有 Ubuntu 节点补装驱动或升级 CUDA；</li>
+<li>从旧版本迁移，需要确认驱动下限与 toolkit 对应关系；</li>
+<li>排障：<code>nvidia-smi</code> 报错、<code>nvcc</code> 版本不符、驱动被自动升级。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>Ubuntu 22.04 LTS，正常安装而非最小化，内核与头文件版本一致；</li>
+<li>能访问软件源（公网或内网镜像），有 gcc、make 与当前内核头文件；</li>
+<li>虚拟化平台支持 PCI 直通（DirectPath I/O 一类），有停机窗口；</li>
+<li>已确认 Secure Boot 状态：开启时第三方驱动需签名，否则加载失败；</li>
+<li>记录当前驱动与 CUDA 版本，便于回滚。</li>
+</ul>
+<h2 id="操作步骤">操作步骤</h2>
+<p>动手前先留一份现场记录：<code>uname -r</code>、<code>lsmod | grep nvidia</code>、<code>dpkg -l | grep nvidia</code>、<code>nvidia-smi -q</code> 的输出各存一份。这不只是留档——升级失败时，对比新旧输出能快速判断是驱动没装、模块没加载，还是设备没直通，比从头猜省时间。</p>
+<h3 id="第一步先确认版本匹配">第一步：先确认版本匹配</h3>
+<p>驱动能支持的 CUDA 上限是硬约束，先对表再动手：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>驱动分支</th><th>可支持的最高 CUDA</th><th>典型用途</th></tr></thead><tbody><tr><td>470</td><td>11.4</td><td>老卡、旧平台兼容</td></tr><tr><td>525</td><td>12.0</td><td>本文基线，搭配 CUDA 11.8</td></tr><tr><td>535</td><td>12.2</td><td>新版仓库默认会升到这里</td></tr></tbody></table>
+<p>三个容易混淆的点：<code>nvidia-smi</code> 右上角的 CUDA Version 是驱动支持的最高运行时版本，不是已安装的 toolkit 版本；CUDA 11.8 要求驱动不低于 520.61.05，525 满足；toolkit 的 runfile 自带一个驱动（例如 520.61.05），只装 toolkit、不勾驱动，才不会覆盖已装好的版本。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">lspci</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> nvidia</span></span>
+<span class="line"><span style="color:#FFC799">uname</span><span style="color:#99FFE4"> -r</span></span>
+<span class="line"><span style="color:#FFC799">gcc</span><span style="color:#99FFE4"> --version</span></span>
+<span class="line"><span style="color:#FFC799">apt-cache</span><span style="color:#99FFE4"> policy</span><span style="color:#99FFE4"> nvidia-driver-525</span></span></code></pre>
+<p>还要留意 CUDA 的小版本兼容性：同一主版本内（如 11.x），用较高版本驱动运行较低版本 toolkit 编译的程序通常没问题，反向则不行；跨主版本（11 升 12）一般要重装 toolkit 并重新编译依赖库。生产环境按业务框架官方支持的组合选，别追最新。</p>
+<h3 id="第二步屏蔽-nouveau">第二步：屏蔽 nouveau</h3>
+<p>开源 nouveau 与官方驱动互斥。不先禁用就装驱动，常见结果是设备被占用、模块加载失败，甚至装完重启黑屏。写入黑名单并更新 initramfs，重启后确认模块没被加载：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/modprobe.d/blacklist-nouveau.conf</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">blacklist nouveau</span></span>
+<span class="line"><span style="color:#99FFE4">options nouveau modeset=0</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#FFC799">update-initramfs</span><span style="color:#99FFE4"> -u</span></span>
+<span class="line"><span style="color:#FFC799">reboot</span></span>
+<span class="line"><span style="color:#FFC799">lsmod</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> nouveau</span></span></code></pre>
+<p><code>lsmod</code> 无输出才算成功。带图形界面的机器重启后分辨率可能变低，这是预期现象，装完驱动会恢复。</p>
+<h3 id="第三步安装驱动">第三步：安装驱动</h3>
+<p>先补编译依赖与当前内核头文件，DKMS 编译模块时需要：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-get</span><span style="color:#99FFE4"> update</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-get</span><span style="color:#99FFE4"> install</span><span style="color:#99FFE4"> -y</span><span style="color:#99FFE4"> gcc</span><span style="color:#99FFE4"> make</span><span style="color:#99FFE4"> linux-headers-</span><span style="color:#FFF">$(</span><span style="color:#FFC799">uname</span><span style="color:#99FFE4"> -r</span><span style="color:#FFF">)</span></span></code></pre>
+<p>再用官方 deb 仓库安装。包名与路径按实际下载的版本替换，先注册仓库，再交给 apt 装：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> dpkg</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> nvidia-driver-local-repo-ubuntu2204-525.147.05_1.0-1_amd64.deb</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> cp</span><span style="color:#99FFE4"> /var/nvidia-driver-local-repo-ubuntu2204-525.147.05/nvidia-driver-local-</span><span style="color:#A0A0A0">*</span><span style="color:#99FFE4">-keyring.gpg</span><span style="color:#99FFE4"> /usr/share/keyrings/</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-get</span><span style="color:#99FFE4"> update</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-get</span><span style="color:#99FFE4"> install</span><span style="color:#99FFE4"> -y</span><span style="color:#99FFE4"> nvidia-driver-525</span></span></code></pre>
+<p>apt 解析依赖时可能把驱动升到更新的分支，例如从 525 升到 535。业务对版本敏感时显式锁定：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-get</span><span style="color:#99FFE4"> install</span><span style="color:#99FFE4"> -y</span><span style="color:#99FFE4"> nvidia-driver-525=525.147.05-0ubuntu1</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-mark</span><span style="color:#99FFE4"> hold</span><span style="color:#99FFE4"> nvidia-driver-525</span></span></code></pre>
+<p>deb 仓库方式的好处是驱动与依赖交给 apt 管，升级、卸载都干净；代价是容易被仓库里的新版本带走。runfile 自带的驱动安装器适合离线环境，但版本升级要手动处理。两种方式不要混用，混装过一次就很难查清版本来源。</p>
+<p>装完先别急着重启，用 <code>dkms status</code> 确认模块编译成功。Secure Boot 开启时模块会进入待签名队列，需要用 MOK 完成登记，否则重启后驱动不会加载。</p>
+<h3 id="第四步添加-pci-直通设备">第四步：添加 PCI 直通设备</h3>
+<p>虚拟机没有直通设备时，<code>nvidia-smi</code> 必然找不到卡。顺序是固定的：关机、编辑虚拟机设置、添加 PCI 设备、选择对应显卡的直通模式（不是共享或 vGPU）、开机。进入系统后确认设备与驱动：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">lspci</span><span style="color:#99FFE4"> -nn</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> grep</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> nvidia</span></span>
+<span class="line"><span style="color:#FFC799">nvidia-smi</span></span></code></pre>
+<p>直通后显卡被这台虚拟机独占，宿主机与其他虚拟机不能再用；热迁移通常也不支持。规划时把这两条写进变更说明，别等迁移窗口才发现迁不动。</p>
+<h3 id="第五步安装-cuda-toolkit">第五步：安装 CUDA toolkit</h3>
+<p>安装包从官方下载页获取，或提前传入内网文件服务器。runfile 方式最可控：TUI 中接受许可、取消 Driver 勾选、只保留 Toolkit，实测全选组件容易在依赖上失败：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">chmod</span><span style="color:#FFC799"> 755</span><span style="color:#99FFE4"> cuda_11.8.0_520.61.05_linux.run</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> ./cuda_11.8.0_520.61.05_linux.run</span></span></code></pre>
+<p>无人值守场景用参数跳过交互：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> ./cuda_11.8.0_520.61.05_linux.run</span><span style="color:#99FFE4"> --silent</span><span style="color:#99FFE4"> --toolkit</span><span style="color:#99FFE4"> --toolkitpath=/usr/local/cuda-11.8</span></span></code></pre>
+<h3 id="第六步配置环境变量">第六步：配置环境变量</h3>
+<p>装完 <code>nvcc</code> 不在 PATH 里，直接执行会报找不到命令。写进全局 profile，所有用户都能用：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/profile.d/cuda.sh</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">export PATH=/usr/local/cuda-11.8/bin:$PATH</span></span>
+<span class="line"><span style="color:#99FFE4">export LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:$LD_LIBRARY_PATH</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#FFC799">source</span><span style="color:#99FFE4"> /etc/profile.d/cuda.sh</span></span></code></pre>
+<p>环境变量只对登录 shell 生效。systemd 托管的服务、容器或 cron 启动的进程读不到 <code>/etc/profile.d</code>，这类场景要把库路径写进 <code>/etc/ld.so.conf.d/cuda.conf</code> 再执行 <code>ldconfig</code>，否则运行时会报找不到 <code>libcudart</code> 一类错误。</p>
+<p>多版本共存时，用 <code>update-alternatives</code> 或让 <code>/usr/local/cuda</code> 软链指向当前版本，比反复调 PATH 顺序更直观，也不容易在新开终端里失效。</p>
+<h2 id="验证">验证</h2>
+<p>三件事依次确认：<code>nvidia-smi</code> 能看到卡、驱动版本与显存；<code>nvcc --version</code> 输出 11.8；编译一个小样例能跑通。业务侧再用框架自检：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nvidia-smi</span><span style="color:#99FFE4"> --query-gpu=name,driver_version,memory.total</span><span style="color:#99FFE4"> --format=csv</span></span>
+<span class="line"><span style="color:#FFC799">nvcc</span><span style="color:#99FFE4"> --version</span></span>
+<span class="line"><span style="color:#FFC799">cat</span><span style="color:#99FFE4"> /usr/local/cuda/version.json</span></span></code></pre>
+<p>框架装对应 CUDA 版本的 wheel（例如 cu118），不要用 CPU 版轮子验证 GPU；<code>torch.cuda.is_available()</code> 返回 True 才算链路打通。只看 <code>nvcc</code> 版本而不跑一次实际运算，很容易漏掉库路径问题。最后跑一次小矩阵乘法或框架自带的基准，确认算力正常、显存可分配，避免”能识别但一跑就崩”的情况。</p>
+<h2 id="风险与回滚">风险与回滚</h2>
+<p>风险按概率排：内核升级后 DKMS 编译失败；nouveau 未屏蔽导致设备被占用；apt 把 525 升到 535，与业务锁定的 CUDA 版本不再匹配；直通显卡让虚拟机失去热迁移能力。回滚顺序是先卸驱动与 toolkit，再清配置：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-mark</span><span style="color:#99FFE4"> unhold</span><span style="color:#99FFE4"> nvidia-driver-525</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> apt-get</span><span style="color:#99FFE4"> purge</span><span style="color:#99FFE4"> -y</span><span style="color:#99FFE4"> '^nvidia-.*'</span><span style="color:#99FFE4"> '^cuda-.*'</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> rm</span><span style="color:#99FFE4"> -rf</span><span style="color:#99FFE4"> /usr/local/cuda-11.8</span><span style="color:#99FFE4"> /etc/profile.d/cuda.sh</span></span>
+<span class="line"><span style="color:#FFC799">sudo</span><span style="color:#99FFE4"> update-initramfs</span><span style="color:#99FFE4"> -u</span></span>
+<span class="line"><span style="color:#FFC799">reboot</span></span></code></pre>
+<p>重装前把 <code>/etc/modprobe.d/blacklist-nouveau.conf</code> 一并清理，避免下次安装时误以为已经屏蔽、结果顺序又乱掉。</p>
+<h2 id="常见问题">常见问题</h2>
+<ul>
+<li><strong><code>nvidia-smi</code> 报 No devices were found</strong>：PCI 设备没加或加错，关机重新添加直通显卡。</li>
+<li><strong>驱动版本和装的不一样</strong>：apt 跟随仓库升级了，用 <code>apt-cache policy</code> 看候选版本并 hold。</li>
+<li><strong><code>nvcc</code> 找不到</strong>：PATH 没生效，确认 profile 被 source，且文件有可执行权限。</li>
+<li><strong>DKMS 编译失败</strong>：内核头文件缺失或内核刚升级，装 <code>linux-headers-$(uname -r)</code> 后重跑。</li>
+<li><strong>重启后黑屏或循环登录</strong>：nouveau 与官方驱动冲突，或 Secure Boot 未签名，先卸驱动回到开源显卡。</li>
+<li><strong>内核升级后驱动失效</strong>：DKMS 需要按新内核重新编译，装好新内核头文件后重跑 <code>dkms autoinstall</code>，或重装同版本驱动。</li>
+<li><strong>安装过程提示需要重启</strong>：安装器检测到内核模块变化，按提示重启，重启后再确认驱动加载。</li>
+<li><strong>CUDA 版本与框架不匹配</strong>：按框架要求装对应 wheel，主版本不要混用。</li>
+</ul> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/麒麟安全基线/"> <span class="label">← 上一篇</span> <span class="title">麒麟 V10 SP3 安全基线核查清单</span> </a> <a class="next" href="/2026/10/21/运维手册/容灾备份分层设计/"> <span class="label">下一篇 →</span> <span class="title">从本地到异地：容灾备份的分层设计与演练</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「操作系统与安全基线」其他文档</p> <ul> <li><a href="/2026/10/21/运维手册/centos7安全基线/">CentOS 7 安全基线核查与落地清单</a></li><li><a href="/2026/10/21/运维手册/麒麟安全基线/">麒麟 V10 SP3 安全基线核查清单</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#第一步先确认版本匹配">第一步：先确认版本匹配</a></li><li class="depth-3"><a href="#第二步屏蔽-nouveau">第二步：屏蔽 nouveau</a></li><li class="depth-3"><a href="#第三步安装驱动">第三步：安装驱动</a></li><li class="depth-3"><a href="#第四步添加-pci-直通设备">第四步：添加 PCI 直通设备</a></li><li class="depth-3"><a href="#第五步安装-cuda-toolkit">第五步：安装 CUDA toolkit</a></li><li class="depth-3"><a href="#第六步配置环境变量">第六步：配置环境变量</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

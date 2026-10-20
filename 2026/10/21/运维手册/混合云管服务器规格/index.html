@@ -1,0 +1,325 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>混合云管平台服务器规格新增与交付 · ImsayingOhh</title><meta name="description" content="规格选型、库存校验、服务目录挂载与交付验收的闭环路径，覆盖私有云与公有云。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E6%B7%B7%E5%90%88%E4%BA%91%E7%AE%A1%E6%9C%8D%E5%8A%A1%E5%99%A8%E8%A7%84%E6%A0%BC/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="混合云管平台服务器规格新增与交付 · ImsayingOhh"><meta property="og:description" content="规格选型、库存校验、服务目录挂载与交付验收的闭环路径，覆盖私有云与公有云。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E6%B7%B7%E5%90%88%E4%BA%91%E7%AE%A1%E6%9C%8D%E5%8A%A1%E5%99%A8%E8%A7%84%E6%A0%BC/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/cloud/">云平台与公有云</a>  </nav> <h1 class="post-title">混合云管平台服务器规格新增与交付</h1> <p class="post-desc">规格选型、库存校验、服务目录挂载与交付验收的闭环路径，覆盖私有云与公有云。</p> <div class="post-meta"> <time datetime="2026-10-21T12:10:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>4 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/%E6%B7%B7%E5%90%88%E4%BA%91/">混合云</a><a class="tag" href="/tags/%E6%9C%8D%E5%8A%A1%E5%99%A8%E8%A7%84%E6%A0%BC/">服务器规格</a><a class="tag" href="/tags/%E8%BF%90%E7%BB%B4/">运维</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/cloud/">云平台与公有云</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>规格是混合云管平台把业务需求翻译成资源的最小单位：选型决定了成本与性能的平衡，挂载决定用户能不能下单，库存校验决定下单之后能不能真的开出来。本文把这三件事和交付验收串成一条闭环。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>新业务上线，现有规格档位覆盖不了所需的处理器、内存与磁盘组合。</li>
+<li>私有云集群完成扩容，需要把新的可选规格加入服务目录。</li>
+<li>公有云上新增实例族，需要在平台里补一档对应规格。</li>
+<li>规格已经创建，但用户在下单页面选不到。</li>
+<li>临时规格使用完毕，需要清理目录避免误选。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>项目</th><th>要求</th></tr></thead><tbody><tr><td>权限</td><td>平台基础设施与 IT 服务管理两处都具备写权限</td></tr><tr><td>资源</td><td>目标集群剩余处理器、内存满足规格与冗余要求</td></tr><tr><td>兼容</td><td>规格与镜像、驱动、加速卡直通配置相匹配</td></tr><tr><td>命名</td><td>规格名称遵循统一约定，能看出类型与配比</td></tr><tr><td>流程</td><td>规格新增属于变更，需审批并登记到台账</td></tr><tr><td>基线</td><td>现有规格清单与使用率已有统计，便于对比</td></tr></tbody></table>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="1-规格选型">1. 规格选型</h3>
+<p>先看业务画像，再决定档位。计算密集型按处理器与内存 1:2 配比，通用型 1:4，内存型 1:8；磁盘按容量与每秒读写能力分档，数据库类优先固态盘。不要为单个业务造一个孤立规格，优先看现有档位能否覆盖，实在不行再加档，避免规格目录膨胀到无人维护。</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>类型</th><th>处理器与内存比</th><th>典型用途</th></tr></thead><tbody><tr><td>计算型</td><td>1:2</td><td>高并发计算、转码、批量任务</td></tr><tr><td>通用型</td><td>1:4</td><td>Web 服务、中间件、一般应用</td></tr><tr><td>内存型</td><td>1:8</td><td>缓存、内存数据库、大数据组件</td></tr></tbody></table>
+<h3 id="2-平台内新增计算规格">2. 平台内新增计算规格</h3>
+<p>进入「基础设施 — 镜像和规格 — 计算规格」，点击添加规格，填写名称、处理器核数、内存容量、磁盘与描述，保存后规格会出现在列表中。名称建议采用「类型-核数-内存」的结构，例如 <code>general-4c-16g</code>，后续在工单里也能一眼分辨。</p>
+<h3 id="3-库存校验">3. 库存校验</h3>
+<p>规格不是想加就加，加之前要确认开得出来。核对四项：目标集群剩余处理器与内存、存储池剩余容量、地址池可用地址、租户配额与许可余量。任何一项不足，先扩容再发布规格，否则用户下单会在创建阶段失败。</p>
+<p>还要看规格与集群特性的匹配：需要加速卡的规格，要确认宿主机有空闲卡且直通配置已开启；大内存规格要确认单机可分配上限；跨集群发布前确认目标集群的镜像模板与网络已就绪。余量按峰值判断而不是平均值，至少留出一轮批量下单的空间。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 查询目标集群余量（接口地址与令牌为占位符）</span></span>
+<span class="line"><span style="color:#FFC799">curl</span><span style="color:#99FFE4"> -s</span><span style="color:#99FFE4"> 'https://cloud.example.com/api/v1/clusters/node-01'</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -H</span><span style="color:#99FFE4"> 'Authorization: Bearer &#x3C;api-token>'</span></span></code></pre>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 交付后在实例内核对实际配置</span></span>
+<span class="line"><span style="color:#FFC799">nproc</span></span>
+<span class="line"><span style="color:#FFC799">free</span><span style="color:#99FFE4"> -h</span></span>
+<span class="line"><span style="color:#FFC799">lsblk</span><span style="color:#99FFE4"> -o</span><span style="color:#99FFE4"> NAME,SIZE,TYPE,MOUNTPOINT</span></span>
+<span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> -4</span><span style="color:#99FFE4"> addr</span><span style="color:#99FFE4"> show</span></span></code></pre>
+<h3 id="4-挂入服务目录">4. 挂入服务目录</h3>
+<p>规格创建完成只是第一步，用户能不能选到取决于服务目录。打开「IT 服务管理 — 服务设计 — 服务配置」，搜索对应的请求单名称，点开该工单，选择「节点配置 — Compute」，在计算规格下拉框中勾选刚创建或已有的规格，保存。保存后新建的工单即可选到该规格，已提交的工单按提交时的定义执行，不受影响。</p>
+<h3 id="5-公有云规格">5. 公有云规格</h3>
+<p>公有云要单独新增云平台规格：名称按云上实例规格的原文填写，云平台类型选择目标平台，再选择配置并查找具体实例规格保存；随后同样回到请求单的 Compute 节点勾选。容器场景必须单独建规格，不要复用虚拟机规格。临时使用的规格用后及时清理，目录里通常只保留日常档位，计算型、通用型、内存型各一档即可。</p>
+<h3 id="6-申请与交付验收">6. 申请与交付验收</h3>
+<p>用户提单、审批通过后由平台按规格创建，交付时逐项验收：处理器与内存、系统盘与数据盘、磁盘类型、网络与安全组、主机名与时区、监控与备份策略。交付记录里写清规格名称与实例标识，方便后续扩容时对照。</p>
+<h2 id="验证">验证</h2>
+<ul>
+<li>规格列表可见，名称符合约定，处理器与内存和登记一致。</li>
+<li>新建工单能选到该规格，历史工单未受影响。</li>
+<li>交付实例的配置与订单逐项一致，磁盘与网络正常。</li>
+<li>集群余量扣减正确，配额与许可没有超限。</li>
+<li>规格台账已更新，临时规格记录了回收时间。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+<p>规格一旦被工单引用就不宜删除，删除会让历史工单失去追溯依据、新工单直接报错，正确做法是停用或修改描述。规格填写错误，比如配比、磁盘类型与镜像不匹配，往往在交付后才暴露，代价是重建实例。跳过库存校验直接发布规格，风险最大：批量下单时可能把集群资源打满，影响存量业务。</p>
+<p>回滚很轻：新规格可以停用，或从请求单的 Compute 节点取消勾选。已经交付的实例不能靠改规格定义反向修改，只能按变更流程重建或调整配置。</p>
+<h2 id="常见问题">常见问题</h2>
+<p><strong>规格加了但下单页面看不到。</strong> 检查是否在请求单的 Compute 节点勾选并保存，以及该工单版本是否已发布生效。</p>
+<p><strong>规格名称与云上实例族对不上。</strong> 公有云规格要按云平台实例规格的原文命名，否则运维与用户各说各话，排查时容易误判。</p>
+<p><strong>新增规格后下单失败。</strong> 先查集群余量与租户配额，再看镜像模板是否存在、加速卡是否已被占满。</p>
+<p><strong>容器也用了虚拟机规格。</strong> 容器需要独立规格，复用会导致资源计量与调度偏差，应单独创建。</p> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/oss证书替换/"> <span class="label">← 上一篇</span> <span class="title">OSS 自定义域名证书到期检查与替换</span> </a> <span></span> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「云平台与公有云」其他文档</p> <ul> <li><a href="/2026/10/21/运维手册/阿里云平台日常操作/">阿里云平台日常运维操作手册</a></li><li><a href="/2026/10/21/运维手册/oss证书替换/">OSS 自定义域名证书到期检查与替换</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#1-规格选型">1. 规格选型</a></li><li class="depth-3"><a href="#2-平台内新增计算规格">2. 平台内新增计算规格</a></li><li class="depth-3"><a href="#3-库存校验">3. 库存校验</a></li><li class="depth-3"><a href="#4-挂入服务目录">4. 挂入服务目录</a></li><li class="depth-3"><a href="#5-公有云规格">5. 公有云规格</a></li><li class="depth-3"><a href="#6-申请与交付验收">6. 申请与交付验收</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

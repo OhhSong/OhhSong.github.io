@@ -1,0 +1,314 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>vSAN 磁盘故障处理与组件重建 · ImsayingOhh</title><meta name="description" content="vSAN 6.7 与 7.0 的故障盘判定、磁盘组移除、组件重建与验证流程。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/vsan%E7%A3%81%E7%9B%98%E6%95%85%E9%9A%9C%E5%A4%84%E7%90%86/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="vSAN 磁盘故障处理与组件重建 · ImsayingOhh"><meta property="og:description" content="vSAN 6.7 与 7.0 的故障盘判定、磁盘组移除、组件重建与验证流程。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/vsan%E7%A3%81%E7%9B%98%E6%95%85%E9%9A%9C%E5%A4%84%E7%90%86/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/virtualization/">虚拟化与超融合</a>  </nav> <h1 class="post-title">vSAN 磁盘故障处理与组件重建</h1> <p class="post-desc">vSAN 6.7 与 7.0 的故障盘判定、磁盘组移除、组件重建与验证流程。</p> <div class="post-meta"> <time datetime="2026-10-21T07:40:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>5 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/VMware/">VMware</a><a class="tag" href="/tags/vSAN/">vSAN</a><a class="tag" href="/tags/%E5%AD%98%E5%82%A8/">存储</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/virtualization/">虚拟化与超融合</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>vSAN 的可用性靠副本与重建，不靠单块盘——故障处理的核心是先判清是容量盘还是缓存盘、还有没有可落位的故障域余量，再决定移除单盘还是整个磁盘组。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>磁盘组内磁盘状态为 Failed、Degraded 或 Inaccessible；</li>
+<li>磁盘已损坏，无法通过界面正常移除；</li>
+<li>更换磁盘后需要重新声明磁盘组并触发组件重建；</li>
+<li>重建长期无进展，需要定位是容量、网络还是策略问题；</li>
+<li>平台从 6.7 升级到 7.0 前，需要确认两版处置方式的差异。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ol>
+<li><strong>版本确认</strong>：管理 → vSAN → 配置，确认集群版本。6.7 只能整组移除磁盘组，7.0 支持单独移除容量盘，两者操作不可混用。</li>
+<li><strong>SSH 与权限</strong>：在主机管理 → 服务中开启 SSH，使用具备 vSAN 管理权限的账号。</li>
+<li><strong>数据保护</strong>：关键虚拟机完成备份，或确认存储策略的副本数足以承受单盘、单主机故障。</li>
+<li><strong>容量余量</strong>：集群剩余容量足以承载重建期间的副本落位；剩余空间低于两成时先扩容再动手。</li>
+<li><strong>备件合规</strong>：替换磁盘在 vSAN 兼容性列表内，容量不小于原盘，缓存盘与容量盘的介质类型符合原设计。</li>
+<li><strong>窗口与通知</strong>：重建会持续占用 IO 与网络，安排在业务低峰执行，并提前告知业务方。</li>
+</ol>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="第一步判定故障盘与影响范围">第一步：判定故障盘与影响范围</h3>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span>ssh root@192.0.2.10</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 列出 vSAN 磁盘，筛出异常状态</span></span>
+<span class="line"><span>esxcli vsan storage list | grep -i -E "failed|degraded|inaccessible"</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 查看磁盘组与缓存盘、容量盘的对应关系</span></span>
+<span class="line"><span>esxcli vsan storage list</span></span></code></pre>
+<p>记录故障盘的设备名或 UUID。容量盘故障影响的是该盘上的组件，集群会按策略在其他主机重建；缓存盘故障会让整个磁盘组不可用，影响面明显更大。</p>
+<h3 id="第二步尝试用维护模式迁走组件">第二步：尝试用维护模式迁走组件</h3>
+<p>在 vSphere Client 中对故障盘所在主机执行进入维护模式，选择“确保所有组件可访问”。迁移成功说明副本仍能落位，后续按正常流程换盘即可；迁移失败要记录错误码，常见两类是无可用副本（对象不可访问）与容量不足。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span># 命令行方式进入维护模式</span></span>
+<span class="line"><span>esxcli system maintenanceMode set --enable true</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 确认主机已进入维护模式</span></span>
+<span class="line"><span>vim-cmd hostsvc/hostsummary | grep -i maintenance</span></span></code></pre>
+<h3 id="第三步关闭自动磁盘管理并移除">第三步：关闭自动磁盘管理并移除</h3>
+<p>自动磁盘管理开启时，拔盘与重建可能被自动动作打断，先关掉再操作：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span>esxcli vsan storage automode set --enabled false</span></span></code></pre>
+<p>vSAN 6.7 的做法是移除整个磁盘组，用磁盘组 UUID 定位：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span># 查到磁盘组 UUID 后整组移除</span></span>
+<span class="line"><span>esxcli vsan storage remove -u $VSAN_DISKGROUP_UUID</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 确认移除结果</span></span>
+<span class="line"><span>esxcli vsan storage list</span></span></code></pre>
+<p>vSAN 7.0 在仅容量盘故障时可以单盘移除；缓存盘故障或启用了去重压缩时，仍需整组移除：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span># 单盘移除，参数为设备 ID</span></span>
+<span class="line"><span>esxcli vsan storage remove -d $VSAN_DEVICE_ID</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 整组移除，参数为磁盘组 UUID</span></span>
+<span class="line"><span>esxcli vsan storage remove -u $VSAN_DISKGROUP_UUID</span></span></code></pre>
+<h3 id="第四步退出维护模式并触发重建">第四步：退出维护模式并触发重建</h3>
+<p>换盘完成后退出维护模式，确认主机重新加入集群，再触发重平衡让组件尽快按策略落位：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span>esxcli system maintenanceMode set --enable false</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 触发主动重平衡，加快数据重建与分布</span></span>
+<span class="line"><span>esxcli vsan proactive rebalance start</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 查看同步进度</span></span>
+<span class="line"><span>esxcli vsan debug resync status</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 查看集群健康</span></span>
+<span class="line"><span>esxcli vsan health cluster get</span></span></code></pre>
+<p>新盘需要重新声明后才能被 vSAN 使用，按介质类型加入对应磁盘组：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span># 先列出可用设备，确认设备名与介质类型</span></span>
+<span class="line"><span>esxcli vsan storage list</span></span>
+<span class="line"><span></span></span>
+<span class="line"><span># 将新盘加入磁盘组，缓存盘与容量盘参数不同，按实际填写</span></span>
+<span class="line"><span>esxcli vsan storage add -d &#x3C;设备名> -s &#x3C;缓存设备名></span></span></code></pre>
+<h3 id="第五步监控重建直至收敛">第五步：监控重建直至收敛</h3>
+<p>重建期间重点看三个指标：组件同步进度、集群剩余容量、集群健康告警。对象多、数据量大时重建可能持续数小时到数天，期间不要再次拔盘，也不要对同一集群做升级或策略变更。</p>
+<h2 id="验证">验证</h2>
+<ol>
+<li><code>esxcli vsan storage list</code> 中故障盘或故障磁盘组已消失，新盘状态正常；</li>
+<li><code>esxcli vsan debug resync status</code> 显示同步完成，无长期滞留对象；</li>
+<li><code>esxcli vsan health cluster get</code> 各项为 Healthy，无组件缺失告警；</li>
+<li>集群容量回到安全水位，存储策略的合规性检查通过；</li>
+<li>抽测虚拟机可正常读写，业务侧无感知异常。</li>
+</ol>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li><strong>移除不可逆</strong>：磁盘组移除后元数据清空，数据只能靠其他主机副本重建；操作前必须确认副本数与故障域余量足够。</li>
+<li><strong>无副本可重建</strong>：策略副本不足或故障域设置过窄时，重建会卡在无落点，需先把集群恢复为可访问状态再处理。</li>
+<li><strong>去重压缩</strong>：启用去重或压缩的集群不支持单盘移除，必须先走整组移除，并提前评估关闭策略的影响。</li>
+<li><strong>重建期性能</strong>：重建占用带宽与磁盘 IO，业务敏感集群建议限制并发或错峰执行。</li>
+<li><strong>回滚思路</strong>：若移除后发现判断错误，不要尝试手工拼回磁盘组，应停止操作、保留现场，通过备份恢复受影响的虚拟机。</li>
+</ul>
+<h2 id="常见问题">常见问题</h2>
+<p><strong>Q：磁盘状态卡住，移除命令一直不返回。</strong>
+先确认主机确实在维护模式、自动磁盘管理已关闭；仍卡住时可强制把盘标记为丢失并重新扫描适配器，再重试移除。</p>
+<p><strong>Q：组件长时间不重建。</strong>
+多为容量不足、副本策略不允许落位或主机间网络异常。先看剩余容量与策略合规性，再查 vSAN 网络连通性。</p>
+<p><strong>Q：7.0 上单盘移除后集群仍告警。</strong>
+确认移除的是容量盘而非缓存盘；缓存盘故障必须整组移除，残留的磁盘组元数据会持续产生告警。</p>
+<p><strong>Q：换盘后新盘不被识别。</strong>
+核对设备是否在兼容列表、是否被 RAID 卡以直通模式呈现；必要时重新扫描存储适配器后再执行声明命令。</p>
+<p><strong>Q：重建期间业务变慢。</strong>
+这是预期内的资源竞争。可在窗口内降低并发同步数、暂停非关键批量任务，避免在重建高峰期做其他变更。</p> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/vsphere日常运维/"> <span class="label">← 上一篇</span> <span class="title">vSphere 日常运维与虚拟机全生命周期管理</span> </a> <a class="next" href="/2026/10/21/运维手册/vmware迁移smartx/"> <span class="label">下一篇 →</span> <span class="title">VMware 到 SmartX 的在线迁移实施要点</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「虚拟化与超融合」其他文档</p> <ul> <li><a href="/2026/10/21/运维手册/vmware证书轮换/">vSphere 平台证书轮换与备份存储清理</a></li><li><a href="/2026/10/21/运维手册/esxi版本维护策略/">ESXi 大版本滚动升级与平台版本收敛</a></li><li><a href="/2026/10/21/运维手册/vsphere日常运维/">vSphere 日常运维与虚拟机全生命周期管理</a></li><li><a href="/2026/10/21/运维手册/vmware迁移smartx/">VMware 到 SmartX 的在线迁移实施要点</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#第一步判定故障盘与影响范围">第一步：判定故障盘与影响范围</a></li><li class="depth-3"><a href="#第二步尝试用维护模式迁走组件">第二步：尝试用维护模式迁走组件</a></li><li class="depth-3"><a href="#第三步关闭自动磁盘管理并移除">第三步：关闭自动磁盘管理并移除</a></li><li class="depth-3"><a href="#第四步退出维护模式并触发重建">第四步：退出维护模式并触发重建</a></li><li class="depth-3"><a href="#第五步监控重建直至收敛">第五步：监控重建直至收敛</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

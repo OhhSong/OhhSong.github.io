@@ -1,0 +1,389 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>从本地到异地：容灾备份的分层设计与演练 · ImsayingOhh</title><meta name="description" content="用 RPO/RTO 给业务分级，把备份副本按本地、同城、异地分层放置，并给出演练与切换检查清单。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E5%AE%B9%E7%81%BE%E5%A4%87%E4%BB%BD%E5%88%86%E5%B1%82%E8%AE%BE%E8%AE%A1/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="从本地到异地：容灾备份的分层设计与演练 · ImsayingOhh"><meta property="og:description" content="用 RPO/RTO 给业务分级，把备份副本按本地、同城、异地分层放置，并给出演练与切换检查清单。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E5%AE%B9%E7%81%BE%E5%A4%87%E4%BB%BD%E5%88%86%E5%B1%82%E8%AE%BE%E8%AE%A1/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/backup/">备份、容灾与应急</a>  </nav> <h1 class="post-title">从本地到异地：容灾备份的分层设计与演练</h1> <p class="post-desc">用 RPO/RTO 给业务分级，把备份副本按本地、同城、异地分层放置，并给出演练与切换检查清单。</p> <div class="post-meta"> <time datetime="2026-10-21T10:10:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>5 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/%E5%AE%B9%E7%81%BE/">容灾</a><a class="tag" href="/tags/%E5%A4%87%E4%BB%BD/">备份</a><a class="tag" href="/tags/%E6%95%B0%E6%8D%AE%E4%BF%9D%E6%8A%A4/">数据保护</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/backup/">备份、容灾与应急</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>容灾不是再买一套存储，而是先用 RPO/RTO 把业务分级，再把副本按距离分层放置，最后用演练证明”真能恢复”。没有验证过恢复的备份方案，只是一份心理安慰。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>新系统上线前规划备份与容灾等级；</li>
+<li>现有系统只有本地备份，需要补一份离场副本；</li>
+<li>年度容灾演练、等保测评前的自查整改；</li>
+<li>扩容评估：数据量、带宽、保留周期与预算的测算。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>资产与数据清单：涉及哪些系统、存量多大、每日增量多少；</li>
+<li>业务分级结果与业务方确认的 RPO/RTO，不能由运维单方面拍板；</li>
+<li>本地与异地之间的链路、带宽、可用传输窗口；</li>
+<li>备份端与被备份端的存储容量规划，预留 20%–30% 余量；</li>
+<li>恢复环境：备节点、可临时扩缩的云资源，或整机恢复平台。</li>
+</ul>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="第一步先定-rpo-与-rto">第一步：先定 RPO 与 RTO</h3>
+<p>两个指标决定后面所有设计。RPO 是能接受丢多少数据，决定备份频率与复制方式；RTO 是能接受停多久，决定热备、温备还是冷备：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>业务等级</th><th>RPO</th><th>RTO</th><th>常用手段</th></tr></thead><tbody><tr><td>1 级核心</td><td>接近 0</td><td>分钟级</td><td>双活或同步复制，自动切换</td></tr><tr><td>2 级重要</td><td>≤15 分钟</td><td>≤1 小时</td><td>异步复制加备节点</td></tr><tr><td>3 级一般</td><td>≤24 小时</td><td>≤4 小时</td><td>每日备份加资源预留</td></tr><tr><td>4 级次要</td><td>≤1 周</td><td>≤1 天</td><td>每周备份，恢复时临时采购</td></tr><tr><td>5 级归档</td><td>季度级</td><td>数天</td><td>离线副本或归档介质</td></tr></tbody></table>
+<p>RPO 与 RTO 是一条成本曲线：RPO 从 24 小时压到 15 分钟，投入往往翻几倍。先分级、再谈钱，比先买设备再找业务确认合理得多。</p>
+<h3 id="第二步设计备份分层">第二步：设计备份分层</h3>
+<p>分层的本质是用不同介质和距离对抗不同故障域，单一层次的备份一定覆盖不全：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>层次</th><th>位置与距离</th><th>介质</th><th>频率</th><th>保留</th><th>主要防什么</th></tr></thead><tbody><tr><td>本地备份</td><td>同机房或同园区</td><td>NAS 或对象存储</td><td>每日全量或增量</td><td>30 天</td><td>误删、逻辑错误、单机故障</td></tr><tr><td>同城灾备</td><td>约 50 公里内</td><td>独立机房存储</td><td>每日拉取</td><td>1–3 个月</td><td>机房级故障：断电、漏水、光缆中断</td></tr><tr><td>异地灾备</td><td>1000 公里以上</td><td>异地机房或另一朵云</td><td>每日或每周</td><td>一个季度</td><td>区域灾难：地震、台风、战争</td></tr><tr><td>离线副本</td><td>离线介质或不可变存储</td><td>磁带、对象锁</td><td>季度</td><td>半年以上</td><td>勒索加密、删库、内部破坏</td></tr></tbody></table>
+<p>三条原则落到具体动作：至少三份副本、两种介质、一份离场（3-2-1）；备份由备份端主动拉取，而不是生产端推送，生产被攻陷时备份才不受牵连；副本设为不可变，保留期内不可删改，这是对抗勒索最有效的一招。</p>
+<h3 id="第三步选定备份方式与传输">第三步：选定备份方式与传输</h3>
+<ul>
+<li>数据库：物理备份或逻辑导出，每日全量加日志增量，恢复时按时间点回放；</li>
+<li>文件与代码包：全量基线加 rsync 增量，先比对清单再传内容；</li>
+<li>对象存储：按前缀增量同步，注意版本控制与删除标记的差异；</li>
+<li>虚机与整机：快照加导出，但要清楚快照不能替代备份，同盘故障会一起丢。</li>
+</ul>
+<p>传输走专线或 VPN，链路加密，备份流量单独限速，避免把生产带宽吃满。拉取式方案在生产侧只开只读凭据，凭据定期轮换，别用管理员账号跑备份任务。</p>
+<h3 id="第四步估算容量与带宽">第四步：估算容量与带宽</h3>
+<p>带宽先算理论值，再按实测效率打折：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span>吞吐(MB/s) = 带宽(Mbps) × 利用率 ÷ 8</span></span>
+<span class="line"><span>每日可传(TB) ≈ 吞吐 × 86400 ÷ 1024 ÷ 1024</span></span></code></pre>
+<p>以 500 Mbps 链路、80% 利用率为例，理论约 50 MB/s、每日约 4.2 TB；实测往往只有 28 MB/s 左右，实际每日约 2.4 TB。备份窗口按”增量 ÷ 实测吞吐”再留一倍余量，跨地域链路还要算上丢包重传。</p>
+<p>容量按”全量 × 副本数 + 每日增量 × 保留天数”估算，再加 30% 数据增长与 20% 冗余。保留策略一改，容量就要重算，别等写满才扩容。</p>
+<h3 id="第五步编排任务与监控">第五步：编排任务与监控</h3>
+<ul>
+<li>按业务低峰排窗口，同一链路上的任务错峰，避免互相抢带宽；</li>
+<li>任务有依赖：先备份数据库再备份附件，失败不跳过、可重试；</li>
+<li>每次任务记录开始结束时间、数据量与校验结果；</li>
+<li>监控盯三件事：任务成功率、窗口是否超时、容量水位；</li>
+<li>校验不能只看”任务成功”，文件数、总大小、抽样校验和、数据库一致性检查至少做一项。</li>
+</ul>
+<h3 id="第六步演练">第六步：演练</h3>
+<p>演练是方案的一部分，不是额外工作。核心系统每季度一次全流程，非核心每半年一次；范围从小到大：单文件恢复、单系统恢复、整站切换。</p>
+<ul>
+<li>恢复验证：把备份恢复到隔离环境，确认数据可用、应用能起；</li>
+<li>记录实测 RTO：从决策到业务可用的真实耗时，与目标对比；</li>
+<li>记录卡点：脚本、凭据、资源、流程分别卡在哪一步；</li>
+<li>形成报告并跟踪整改，下次演练专门验证闭环。</li>
+</ul>
+<h3 id="第七步切换检查清单">第七步：切换检查清单</h3>
+<p>真切换时按清单走，不要临场靠记忆：</p>
+<ul>
+<li>决策与授权：谁拍板、通知谁、什么条件下回切；</li>
+<li>流量：DNS 的 TTL 提前调小，负载均衡与网关切到灾备；</li>
+<li>应用：连接串、配置文件、环境变量、授权范围；</li>
+<li>安全：证书有效期、防火墙与安全组、访问控制；</li>
+<li>数据：切换前快照、反向同步方向、冲突处理规则；</li>
+<li>监控：告警接收人切到灾备值班；</li>
+<li>回切：原环境保留到观察期结束，避免”切过去就拆”。</li>
+</ul>
+<h2 id="验证">验证</h2>
+<p>验收看四个数：备份任务成功率、最近一次恢复演练的实测 RTO、容量水位（建议低于 80%）、备份窗口达成率。再加两项定性检查：随机抽一个文件，能否在约定时间内找回；灾备环境的配置与生产是否一致，靠配置管理或基线比对来确认。</p>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li>恢复覆盖生产：先恢复到隔离环境，确认后再挂载，别直接原地恢复；</li>
+<li>勒索加密：离线副本、不可变存储、备份账号最小权限，三样缺一不可；</li>
+<li>带宽挤占：限速、错峰、压缩，必要时加专线；</li>
+<li>凭据与密钥丢失：集中托管，避免只存在某个人手里；</li>
+<li>切换后回切丢数据：切换前打快照，回切前确认反向同步完成。</li>
+</ul>
+<p>回滚的关键是切换前留退路：原环境不拆、DNS 的 TTL 调小、切换窗口避开批量任务。演练时就把回滚完整走一遍，别等真出事才第一次执行。</p>
+<h2 id="常见问题">常见问题</h2>
+<ul>
+<li><strong>备份成功但恢复失败</strong>：从没验证过恢复，校验和与一致性检查缺失。</li>
+<li><strong>RPO 达标但 RTO 超时</strong>：资源没预留，恢复时才发现要临时采购。</li>
+<li><strong>全量窗口不够</strong>：改成全量加增量，定期合成全量，首次先做种子传输。</li>
+<li><strong>异地带宽不够</strong>：只传变化、压缩、限速，必要时升带宽或拉长保留周期。</li>
+<li><strong>保留策略与容量冲突</strong>：先算容量再定保留，季度与年度副本单独规划。</li>
+<li><strong>备份账号权限过大</strong>：拉取式加只读凭据，定期轮换，别用管理员账号。</li>
+</ul> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/ubuntu-cuda部署/"> <span class="label">← 上一篇</span> <span class="title">Ubuntu 22.04 安装 NVIDIA 驱动与 CUDA 11.8</span> </a> <a class="next" href="/2026/10/21/运维手册/zabbix代理节点规范/"> <span class="label">下一篇 →</span> <span class="title">Zabbix 代理节点与 Agent 接入规范</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「备份、容灾与应急」其他文档</p> <ul> <li><a href="/2026/10/21/运维手册/vsphere-replication容灾/">vSphere Replication 跨 vCenter 容灾复制配置</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#第一步先定-rpo-与-rto">第一步：先定 RPO 与 RTO</a></li><li class="depth-3"><a href="#第二步设计备份分层">第二步：设计备份分层</a></li><li class="depth-3"><a href="#第三步选定备份方式与传输">第三步：选定备份方式与传输</a></li><li class="depth-3"><a href="#第四步估算容量与带宽">第四步：估算容量与带宽</a></li><li class="depth-3"><a href="#第五步编排任务与监控">第五步：编排任务与监控</a></li><li class="depth-3"><a href="#第六步演练">第六步：演练</a></li><li class="depth-3"><a href="#第七步切换检查清单">第七步：切换检查清单</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

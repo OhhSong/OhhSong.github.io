@@ -1,0 +1,341 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Zabbix 日常巡检与维护窗口管理 · ImsayingOhh</title><meta name="description" content="用数据、问题、容量与自身健康四条线做日常巡检，并规范维护窗口的创建。"><link rel="canonical" href="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/zabbix%E6%97%A5%E5%B8%B8%E5%B7%A1%E6%A3%80/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="Zabbix 日常巡检与维护窗口管理 · ImsayingOhh"><meta property="og:description" content="用数据、问题、容量与自身健康四条线做日常巡检，并规范维护窗口的创建。"><meta property="og:url" content="https://ohhsong.github.io/2026/10/21/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/zabbix%E6%97%A5%E5%B8%B8%E5%B7%A1%E6%A3%80/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/monitoring/">监控与告警</a>  </nav> <h1 class="post-title">Zabbix 日常巡检与维护窗口管理</h1> <p class="post-desc">用数据、问题、容量与自身健康四条线做日常巡检，并规范维护窗口的创建。</p> <div class="post-meta"> <time datetime="2026-10-21T11:10:00.000Z">2026年10月21日</time> <span class="dot" aria-hidden="true"></span> <span>5 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/Zabbix/">Zabbix</a><a class="tag" href="/tags/%E7%9B%91%E6%8E%A7/">监控</a><a class="tag" href="/tags/%E5%B7%A1%E6%A3%80/">巡检</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/monitoring/">监控与告警</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>巡检不是把界面点一遍，而是用固定的几条线判断监控体系本身是否健康：数据在不在、问题有没有闭环、容量还能不能撑住、变更前有没有留下维护窗口。这篇指南把日常动作和窗口管理固化成一条可交接的路径。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>值班交接班或每日例行检查，需要判断平台是否可用。</li>
+<li>计划变更前后创建维护窗口，避免批量告警淹没真实故障。</li>
+<li>故障复盘时翻历史问题与指标曲线，还原时间线。</li>
+<li>新同事接手监控平台，需要一条标准的上手路径。</li>
+<li>告警收件人调整、值班表轮换后的通知链路核对。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>项目</th><th>要求</th></tr></thead><tbody><tr><td>账号</td><td>巡检用只读账号，写操作走变更账号</td></tr><tr><td>权限</td><td>账号可见主机组覆盖本人负责的业务范围</td></tr><tr><td>时间</td><td>浏览器、服务端与被监控主机时区一致</td></tr><tr><td>通知</td><td>告警收件人列表与电话升级名单为最新版本</td></tr><tr><td>变更</td><td>维护窗口的范围、起止时间与责任人已确认</td></tr></tbody></table>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="1-每日巡检四条线">1. 每日巡检四条线</h3>
+<p>先跑固定四项，任何一项异常再往下钻。四条线覆盖了数据链路、问题队列、容量趋势和平台自身健康，比逐个页面翻看更快发现系统性问题。</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>巡检项</th><th>看什么</th><th>判定</th></tr></thead><tbody><tr><td>数据链路</td><td>最新数据是否刷新、采集间隔是否正常</td><td>超过两个采集周期无值即异常</td></tr><tr><td>问题队列</td><td>未关闭问题数量与最老问题时长</td><td>存在长期未闭环的严重问题即异常</td></tr><tr><td>容量趋势</td><td>监控项数、每秒新增值、队列长度、缓存占用</td><td>连续三天上涨即需评估</td></tr><tr><td>平台自身</td><td>服务端与代理进程、数据库空间、日志报错</td><td>出现错误日志即跟进</td></tr></tbody></table>
+<h3 id="2-查看监控数据与图形">2. 查看监控数据与图形</h3>
+<p>最新数据页面按主机组过滤，能看到每个监控项最近一次取值与刷新时间；点开监控项后的图形可以看单个指标曲线；图形与仪表盘页面适合把常用性能指标拼在一起看。日常关注的是「值有没有变」和「间隔稳不稳」，不必逐项核对数值。</p>
+<p>也可以用接口批量拉取，避免手工翻页：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 拉取当前未关闭问题（地址与令牌为占位符）</span></span>
+<span class="line"><span style="color:#FFC799">curl</span><span style="color:#99FFE4"> -s</span><span style="color:#99FFE4"> -X</span><span style="color:#99FFE4"> POST</span><span style="color:#99FFE4"> 'https://zabbix.example.com/api_jsonrpc.php'</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -H</span><span style="color:#99FFE4"> 'Content-Type: application/json-rpc'</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -d</span><span style="color:#99FFE4"> '{"jsonrpc":"2.0","method":"problem.get","params":{"output":"extend","recent":true,"sortfield":"eventid","sortorder":"DESC"},"auth":"&#x3C;api-token>","id":1}'</span></span></code></pre>
+<h3 id="3-问题查询与闭环">3. 问题查询与闭环</h3>
+<p>历史问题在问题页面切换「历史记录」，按主机组、严重程度和时间范围筛选，适合复盘；要快速定位某个问题项的走势，直接点该问题进入历史记录，选定时间周期即可。处理完一轮后把结论写回变更记录或值班日志，做到每一条严重问题都有责任人和处理时间。</p>
+<h3 id="4-创建维护窗口">4. 创建维护窗口</h3>
+<p>变更开始前在「配置 — 维护 — 创建维护期间」新建一条记录。名称写清系统与事由；维护类型选「无数据收集」；启用时间比真实操作窗口提前一点开始、延后一点结束，避免操作前几分钟和收尾阶段的抖动触发告警；周期选一次性，长度覆盖整个操作；范围在主机组和主机之间二选一，不要同时填。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 创建一次性维护窗口（参数与令牌为占位符）</span></span>
+<span class="line"><span style="color:#FFC799">curl</span><span style="color:#99FFE4"> -s</span><span style="color:#99FFE4"> -X</span><span style="color:#99FFE4"> POST</span><span style="color:#99FFE4"> 'https://zabbix.example.com/api_jsonrpc.php'</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -H</span><span style="color:#99FFE4"> 'Content-Type: application/json-rpc'</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -d</span><span style="color:#99FFE4"> '{</span></span>
+<span class="line"><span style="color:#99FFE4">    "jsonrpc": "2.0",</span></span>
+<span class="line"><span style="color:#99FFE4">    "method": "maintenance.create",</span></span>
+<span class="line"><span style="color:#99FFE4">    "params": {</span></span>
+<span class="line"><span style="color:#99FFE4">      "name": "业务系统变更维护",</span></span>
+<span class="line"><span style="color:#99FFE4">      "maintenance_type": 1,</span></span>
+<span class="line"><span style="color:#99FFE4">      "active_since": 1790000000,</span></span>
+<span class="line"><span style="color:#99FFE4">      "active_till": 1790003600,</span></span>
+<span class="line"><span style="color:#99FFE4">      "groupids": ["2"],</span></span>
+<span class="line"><span style="color:#99FFE4">      "timeperiods": [{"timeperiod_type": 0, "start_date": 1790000000, "period": 3600}]</span></span>
+<span class="line"><span style="color:#99FFE4">    },</span></span>
+<span class="line"><span style="color:#99FFE4">    "auth": "&#x3C;api-token>",</span></span>
+<span class="line"><span style="color:#99FFE4">    "id": 1</span></span>
+<span class="line"><span style="color:#99FFE4">  }'</span></span></code></pre>
+<p>维护类型为「无数据收集」时，窗口内不采集数据也不计算触发器，适合停机割接；如果只是重启单机、期望继续采集，应选带数据收集的类型。</p>
+<h3 id="5-调整通知对象">5. 调整通知对象</h3>
+<p>在用户的通知配置里，邮箱一般覆盖一般严重与严重级别，电话只覆盖严重与灾难级别，避免所有告警都走语音。调整前确认值班表，调整后发一条测试通知确认链路通。</p>
+<h3 id="6-维护仪表盘">6. 维护仪表盘</h3>
+<p>按业务系统建仪表盘，放上核心资源曲线、未关闭问题列表、代理心跳与队列趋势。仪表盘的价值在交接和应急时一眼看清全局，条目不宜过多，三到五块足够。</p>
+<h3 id="7-数据库与日志维护">7. 数据库与日志维护</h3>
+<p>历史数据保留周期要和容量匹配，常规指标保留 30 到 90 天即可，趋势数据可以更长。每周看一次数据库表空间与慢查询，日志按大小轮转，避免单个文件把分区占满。清理历史数据要走接口或平台自带工具，不要直接删表，否则容易把配置和索引一起破坏。</p>
+<h2 id="验证">验证</h2>
+<ul>
+<li>维护窗口生效期间该范围内不再产生新问题，窗口结束后告警恢复。</li>
+<li>接口返回的问题列表与界面一致，严重级别计数可核对。</li>
+<li>测试通知能到达收件人，升级链路中每个节点都收到。</li>
+<li>巡检记录已落表，异常项标注了跟进人和处理时间。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+<p>维护窗口范围过大的直接后果是真实故障被静默，窗口本身变成盲区，因此范围必须精确到本次变更涉及的主机组或主机。窗口的起止时间要核对时区和跨天，跨零点时容易少填一天。误建窗口时直接停用或删除该维护期间即可恢复，但已进入窗口的告警不会补发，需要在窗口结束后人工确认一遍相关主机。</p>
+<p>通知对象调整会影响整条升级链路，改动前留存原配置，改完立即发测试消息。历史维护记录建议停用而不删除，留作复盘依据。</p>
+<h2 id="常见问题">常见问题</h2>
+<p><strong>维护期间仍然收到告警。</strong> 维护只抑制窗口内新产生的事件，窗口开始前已存在的问题不会消失；也请检查主机是否真的落在维护范围内。</p>
+<p><strong>窗口结束后问题立刻恢复。</strong> 属于正常现象，触发器会重新计算一次；若长时间不恢复，再去看数据是否回来。</p>
+<p><strong>历史问题查不到。</strong> 多半是主机组或时间范围过滤过窄，也可能是数据保留周期已经过去。</p>
+<p><strong>仪表盘打开很慢。</strong> 图表时间范围过大或聚合项过多，缩短范围、减少图表数量即可。</p> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/10/21/运维手册/zabbix代理节点规范/"> <span class="label">← 上一篇</span> <span class="title">Zabbix 代理节点与 Agent 接入规范</span> </a> <a class="next" href="/2026/10/21/运维手册/oss证书替换/"> <span class="label">下一篇 →</span> <span class="title">OSS 自定义域名证书到期检查与替换</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「监控与告警」其他文档</p> <ul> <li><a href="/2026/10/21/运维手册/zabbix监控与告警配置/">Zabbix 监控与告警配置手册</a></li><li><a href="/2026/10/21/运维手册/zabbix代理节点规范/">Zabbix 代理节点与 Agent 接入规范</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#1-每日巡检四条线">1. 每日巡检四条线</a></li><li class="depth-3"><a href="#2-查看监控数据与图形">2. 查看监控数据与图形</a></li><li class="depth-3"><a href="#3-问题查询与闭环">3. 问题查询与闭环</a></li><li class="depth-3"><a href="#4-创建维护窗口">4. 创建维护窗口</a></li><li class="depth-3"><a href="#5-调整通知对象">5. 调整通知对象</a></li><li class="depth-3"><a href="#6-维护仪表盘">6. 维护仪表盘</a></li><li class="depth-3"><a href="#7-数据库与日志维护">7. 数据库与日志维护</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨 —— 一个从大学时期开始记录学习与生活的地方。</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>
