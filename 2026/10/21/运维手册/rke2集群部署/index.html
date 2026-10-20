@@ -10,7 +10,7 @@
           document.documentElement.dataset.theme = 'light';
         }
       })();
-    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+    </script><link rel="stylesheet" href="/_astro/_path_.BujS99Dg.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
   (function () {
     var dialog = document.querySelector('[data-search-dialog]');
     var opener = document.querySelector('[data-search-open]');
@@ -186,6 +186,10 @@
 <p>RKE2 把 etcd、控制面组件、kubelet 与容器运行时收进一个 systemd 服务，节点上不再单独跑 docker，少一层依赖。首个管理节点以 server 角色启动，自行拉起 etcd 并生成集群凭据；第二、第三个管理节点带着同一份凭据，通过 9345 端口注册进控制面，组成三副本 etcd。工作节点只跑 kubelet 与运行时，也可以交给平台侧按注册命令纳管。</p>
 <p>离线部署的关键是断掉运行时的公网依赖。安装脚本与镜像包放固定目录，安装时把镜像导入内置的 containerd 镜像库；节点上的仓库配置文件再把上游地址重写到私有仓库。平台 Chart 与其中引用的镜像同样要提前推一份到私有仓库，安装时用统一仓库参数指过去，否则 Pod 会停在镜像拉取失败。</p>
 <p>高可用分两层：控制面靠三台管理节点加 etcd 副本，入口靠两台负载均衡加 keepalived 漂移 VIP，nginx 把请求反代到各管理节点的 NodePort。</p>
+<figure>
+  <img src="/img/docs/rke2集群部署/rke2集群部署-diagram.svg" alt="示意图" width="800" height="400" loading="lazy" decoding="async">
+  <figcaption>图 1　RKE2 高可用集群拓扑</figcaption>
+</figure>
 <h2 id="操作步骤">操作步骤</h2>
 <ol>
 <li>

@@ -10,7 +10,7 @@
           document.documentElement.dataset.theme = 'light';
         }
       })();
-    </script><link rel="stylesheet" href="/_astro/_path_.CS4pYavP.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+    </script><link rel="stylesheet" href="/_astro/_path_.BujS99Dg.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
   (function () {
     var dialog = document.querySelector('[data-search-dialog]');
     var opener = document.querySelector('[data-search-open]');
@@ -163,6 +163,10 @@
 
 
 <table><thead><tr><th>项目</th><th>要求</th></tr></thead><tbody><tr><td>账号</td><td>巡检用只读账号，写操作走变更账号</td></tr><tr><td>权限</td><td>账号可见主机组覆盖本人负责的业务范围</td></tr><tr><td>时间</td><td>浏览器、服务端与被监控主机时区一致</td></tr><tr><td>通知</td><td>告警收件人列表与电话升级名单为最新版本</td></tr><tr><td>变更</td><td>维护窗口的范围、起止时间与责任人已确认</td></tr></tbody></table>
+<figure>
+  <img src="/img/docs/zabbix日常巡检/zabbix日常巡检-diagram.svg" alt="示意图" width="760" height="552" loading="lazy" decoding="async">
+  <figcaption>图 1　Zabbix 日常巡检四条线</figcaption>
+</figure>
 <h2 id="操作步骤">操作步骤</h2>
 <h3 id="1-每日巡检四条线">1. 每日巡检四条线</h3>
 <p>先跑固定四项，任何一项异常再往下钻。四条线覆盖了数据链路、问题队列、容量趋势和平台自身健康，比逐个页面翻看更快发现系统性问题。</p>
