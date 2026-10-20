@@ -1,0 +1,336 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>VMware 到 SmartX 的在线迁移实施要点 · ImsayingOhh</title><meta name="description" content="以迁移工具为主线，梳理站点对接、网络放通与迁移后网络修正的关键动作。"><link rel="canonical" href="https://ohhsong.github.io/2026/06/11/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/vmware%E8%BF%81%E7%A7%BBsmartx/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="VMware 到 SmartX 的在线迁移实施要点 · ImsayingOhh"><meta property="og:description" content="以迁移工具为主线，梳理站点对接、网络放通与迁移后网络修正的关键动作。"><meta property="og:url" content="https://ohhsong.github.io/2026/06/11/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/vmware%E8%BF%81%E7%A7%BBsmartx/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.BujS99Dg.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/virtualization/">虚拟化与超融合</a>  </nav> <h1 class="post-title">VMware 到 SmartX 的在线迁移实施要点</h1> <p class="post-desc">以迁移工具为主线，梳理站点对接、网络放通与迁移后网络修正的关键动作。</p> <div class="post-meta"> <time datetime="2026-06-11T08:35:52.000Z">2026年6月11日</time> <span class="dot" aria-hidden="true"></span> <span>5 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/VMware/">VMware</a><a class="tag" href="/tags/SmartX/">SmartX</a><a class="tag" href="/tags/%E8%BF%81%E7%A7%BB/">迁移</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/virtualization/">虚拟化与超融合</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>跨平台迁移的难点不在点“开始”，而在网络策略、驱动适配和迁移后的网络修正——把这三件事前置，迁移就只是一批可回退的任务。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>虚拟化平台整体替换，需要把存量虚拟机从 VMware 迁到 SmartX；</li>
+<li>只迁移部分业务系统，源端虚拟机仍保留运行；</li>
+<li>需要在正式迁移前做小批量预演与回退验证；</li>
+<li>迁移后虚拟机网卡 MAC 变化，需要修正客户机网络配置。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ol>
+<li><strong>迁移工具</strong>：迁移工具已部署并同时对接源 vCenter 与目标平台，管理入口形如 <code>https://migrate.example.com</code>，仅对跳板机开放访问。</li>
+<li><strong>网络策略</strong>：迁移工具到源 vCenter、源 ESXi 节点、目标平台各节点的端口全部放通，尤其是 ESXi 的 902 端口与目标端的存储访问端口。</li>
+<li><strong>账号权限</strong>：源端准备只读加迁移所需权限的账号，目标端准备具备建机与存储映射权限的账号。</li>
+<li><strong>容量与备份</strong>：目标端存储容量覆盖源端已用空间并留余量；迁移前对关键业务做备份或快照。</li>
+<li><strong>窗口与清单</strong>：明确迁移批次、每批虚拟机清单、依赖关系与回退顺序，在业务低峰执行。</li>
+</ol>
+<figure>
+  <img src="/img/docs/vmware迁移smartx/vmware迁移smartx-diagram.svg" alt="示意图" width="760" height="552" loading="lazy" decoding="async">
+  <figcaption>图 1　超融合迁移流程</figcaption>
+</figure>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="第一步打通网络策略">第一步：打通网络策略</h3>
+<p>迁移工具需要同时访问三侧，端口按用途逐条确认：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>目标</th><th>端口</th><th>用途</th></tr></thead><tbody><tr><td>源 vCenter</td><td>443、80</td><td>读取清单与虚拟机信息</td></tr><tr><td>源 ESXi 节点</td><td>902</td><td>数据传输通道</td></tr><tr><td>目标平台 VIP</td><td>443、80</td><td>管理接口</td></tr><tr><td>目标平台各节点</td><td>860、3260、3261</td><td>存储与数据通道</td></tr><tr><td>目标平台各节点</td><td>10200–10207</td><td>迁移数据通道</td></tr></tbody></table>
+<p>源虚拟机分散在不同宿主机时，每台宿主机所在节点都必须放通 902，只放通一台会在任务里报通信不可达。</p>
+<h3 id="第二步建立站点对">第二步：建立站点对</h3>
+<p>首次迁移需要分别添加源站点与目标站点：在迁移工具中录入 vCenter 地址与凭据，选择目标平台的接入地址与凭据，校验连通性后保存。站点对建立成功后，工具侧会同步两端的集群、主机、存储与网络清单，后续任务的资源映射都以这份清单为准。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 连通性自检，建议在迁移工具所在网段执行</span></span>
+<span class="line"><span style="color:#FFC799">curl</span><span style="color:#99FFE4"> -k</span><span style="color:#99FFE4"> -s</span><span style="color:#99FFE4"> -o</span><span style="color:#99FFE4"> /dev/null</span><span style="color:#99FFE4"> -w</span><span style="color:#99FFE4"> "%{http_code}\n"</span><span style="color:#99FFE4"> https://vcenter-01.example.com</span></span>
+<span class="line"><span style="color:#FFC799">nc</span><span style="color:#99FFE4"> -zv</span><span style="color:#FFC799"> 192.0.2.11</span><span style="color:#FFC799"> 902</span></span>
+<span class="line"><span style="color:#FFC799">nc</span><span style="color:#99FFE4"> -zv</span><span style="color:#FFC799"> 192.0.2.20</span><span style="color:#FFC799"> 3260</span></span></code></pre>
+<h3 id="第三步源端预演克隆">第三步：源端预演克隆</h3>
+<p>正式迁移前，先在源端克隆一台代表性虚拟机做预演。克隆出来的虚拟机要断网启动，重点核对三件事：网卡是否被识别、MAC 是否变化、路由与 DNS 是否正常。Linux 客户机常见的情况是网卡名从 eth0 变成 ens192，配置文件里仍绑着旧 MAC：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 查看新网卡名与 MAC</span></span>
+<span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> link</span><span style="color:#99FFE4"> show</span></span>
+<span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> addr</span><span style="color:#99FFE4"> show</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#8B8B8B94"># 修改网卡配置中的 MAC 与设备名</span></span>
+<span class="line"><span style="color:#FFC799">vi</span><span style="color:#99FFE4"> /etc/sysconfig/network-scripts/ifcfg-ens192</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#8B8B8B94"># 使配置生效</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> reload</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> restart</span><span style="color:#99FFE4"> network</span></span>
+<span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> addr</span><span style="color:#99FFE4"> show</span></span></code></pre>
+<p>预演通过后再创建正式迁移任务，避免把问题带到生产批次。</p>
+<h3 id="第四步创建并执行迁移任务">第四步：创建并执行迁移任务</h3>
+<p>任务向导按顺序选择：源端虚拟机、目标端集群与存储、网络映射、迁移方式。提交后工具会先做一次预检，检查源端快照、磁盘类型、客户机操作系统与目标端兼容性。预检不通过时按提示处理，常见原因是源端存在快照链、磁盘为独立模式或目标存储容量不足。</p>
+<p>若任务报源端 ESXi 的 902 端口不可达，两条路可选：申请网络策略放通该节点；或先把虚拟机热迁移到已放通策略的宿主机上，再重新提交任务。批量迁移时建议按批次串行，单批控制在可控数量内，便于失败时快速止损。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span># 迁移前核对源虚拟机电源状态与所在宿主机</span></span>
+<span class="line"><span># 任务列表里逐台确认进度、速率与失败原因</span></span>
+<span class="line"><span># 失败任务先看错误码，再决定重试还是回退</span></span></code></pre>
+<h3 id="第五步迁移后修正网络并安装工具">第五步：迁移后修正网络并安装工具</h3>
+<p>虚拟机在目标平台首次启动后，网卡 MAC 大概率变化，需要按预演时的方式修正客户机配置，确保 IP、网关、DNS 与迁移前一致。业务验证通过后，在客户机内安装目标平台的虚拟机工具，用于上报 IP、主机名等基础信息，平台侧才能正确展示虚拟机详情。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#8B8B8B94"># 安装完成后确认服务状态</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> status</span><span style="color:#99FFE4"> smtx-tools</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#8B8B8B94"># 若服务名不同，以实际安装包为准，按对应平台文档执行</span></span></code></pre>
+<h2 id="验证">验证</h2>
+<ol>
+<li>迁移任务状态为成功，无部分完成或超时残留；</li>
+<li>虚拟机在目标平台可正常开机，控制台可登录；</li>
+<li>客户机内 IP、网关、DNS、主机名与迁移前一致，业务端口可访问；</li>
+<li>从堡垒机按原地址登录验证，应用侧连接与依赖正常；</li>
+<li>目标平台页面能看到虚拟机的 IP 与主机名，监控采集恢复。</li>
+</ol>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li><strong>源端仍在运行</strong>：迁移完成不等于可以立即删除源端，先并行观察一个业务周期，确认无回退需求后再清理。</li>
+<li><strong>MAC 与授权绑定</strong>：依赖 MAC 授权的软件在迁移后会失效，提前梳理授权方式，改为按主机名或硬件指纹绑定。</li>
+<li><strong>迁移期间源端变更</strong>：任务执行中不要在源端改配置或扩容磁盘，否则需要重新同步甚至重做。</li>
+<li><strong>回滚</strong>：保留源端虚拟机不删除，回滚时关闭目标端虚拟机、恢复源端开机并核对网络，再按原路径切回。</li>
+<li><strong>网络策略遗漏</strong>：分批迁移时容易只放通部分节点，任务提交前按宿主机清单逐台核对。</li>
+</ul>
+<h2 id="常见问题">常见问题</h2>
+<p><strong>Q：任务提示 902 端口通信不可达。</strong>
+源虚拟机所在宿主机未放通策略。补策略，或先把虚拟机热迁移到已放通的节点再重试。</p>
+<p><strong>Q：迁移后虚拟机网络不通。</strong>
+先看客户机内网卡是否识别、MAC 与配置文件是否一致，再看目标平台端口组 VLAN 是否与源端一致。</p>
+<p><strong>Q：平台页面看不到虚拟机 IP。</strong>
+多为未安装虚拟机工具或工具服务未启动，安装并启动后等待一个采集周期。</p>
+<p><strong>Q：迁移速度远低于预期。</strong>
+检查数据通道带宽是否被其他任务占用、源端存储是否达到 IO 上限，必要时降低并发任务数。</p>
+<p><strong>Q：预检提示源端存在快照。</strong>
+先合并或删除快照再迁移。快照链会让数据同步变慢，也容易造成迁移后的磁盘一致性问题。</p> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/03/26/运维手册/麒麟安全基线/"> <span class="label">← 上一篇</span> <span class="title">麒麟 V10 SP3 安全基线核查清单</span> </a> <a class="next" href="/2026/09/02/运维手册/zabbix代理节点规范/"> <span class="label">下一篇 →</span> <span class="title">Zabbix 代理节点与 Agent 接入规范</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「虚拟化与超融合」其他文档</p> <ul> <li><a href="/2026/10/19/运维手册/vmware证书轮换/">vSphere 平台证书轮换与备份存储清理</a></li><li><a href="/2026/09/21/运维手册/esxi版本维护策略/">ESXi 大版本滚动升级与平台版本收敛</a></li><li><a href="/2024/11/18/运维手册/vsphere日常运维/">vSphere 日常运维与虚拟机全生命周期管理</a></li><li><a href="/2025/07/25/运维手册/vsan磁盘故障处理/">vSAN 磁盘故障处理与组件重建</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#第一步打通网络策略">第一步：打通网络策略</a></li><li class="depth-3"><a href="#第二步建立站点对">第二步：建立站点对</a></li><li class="depth-3"><a href="#第三步源端预演克隆">第三步：源端预演克隆</a></li><li class="depth-3"><a href="#第四步创建并执行迁移任务">第四步：创建并执行迁移任务</a></li><li class="depth-3"><a href="#第五步迁移后修正网络并安装工具">第五步：迁移后修正网络并安装工具</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

@@ -1,0 +1,455 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Velero 容器备份与恢复实践 · ImsayingOhh</title><meta name="description" content="Kubernetes 集群 Velero 备份恢复的落地手册，覆盖部署、定时备份、跨集群恢复与回滚演练。"><link rel="canonical" href="https://ohhsong.github.io/2024/11/15/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/velero%E5%A4%87%E4%BB%BD%E4%B8%8E%E6%81%A2%E5%A4%8D/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="Velero 容器备份与恢复实践 · ImsayingOhh"><meta property="og:description" content="Kubernetes 集群 Velero 备份恢复的落地手册，覆盖部署、定时备份、跨集群恢复与回滚演练。"><meta property="og:url" content="https://ohhsong.github.io/2024/11/15/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/velero%E5%A4%87%E4%BB%BD%E4%B8%8E%E6%81%A2%E5%A4%8D/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.BujS99Dg.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/container/">容器与云原生</a>  </nav> <h1 class="post-title">Velero 容器备份与恢复实践</h1> <p class="post-desc">Kubernetes 集群 Velero 备份恢复的落地手册，覆盖部署、定时备份、跨集群恢复与回滚演练。</p> <div class="post-meta"> <time datetime="2024-11-15T02:30:18.000Z">2024年11月15日</time> <span class="dot" aria-hidden="true"></span> <span>7 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/Velero/">Velero</a><a class="tag" href="/tags/Kubernetes/">Kubernetes</a><a class="tag" href="/tags/%E5%A4%87%E4%BB%BD/">备份</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/container/">容器与云原生</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>Velero 回答的是「Kubernetes 里的东西丢了怎么找回来」：把集群中的资源对象（Deployment、Service、ConfigMap、Secret、PVC 等）以及工作负载的持久卷数据归档到集群外的对象存储，需要时再拉回原集群或另一套集群。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>某个命名空间被误删，对应的 YAML 又没进版本库，需要按命名空间粒度找回。</li>
+<li>平台组件升级、CRD 变更、存储替换之前留一个保护点，出问题能退回升级前的状态。</li>
+<li>生产与容灾两套集群指向同一个存储桶，容灾侧按需取回数据。</li>
+<li>新建集群或机房搬迁，把工作负载整体复制到另一套环境。</li>
+<li>有合规要求，需要按固定周期保留一份可读的备份。</li>
+</ul>
+<p>它和 etcd 快照不是一回事，也不该互相替代：etcd 快照把 API 对象整包拿走，恢复速度快，适合整集群不可用的极端情况，但它不包含 PV 里的业务数据；Velero 覆盖资源加数据，代价是恢复时必须有一个活着的集群。生产上通常是二者并存，集群证书、kubeadm 配置文件、etcd 快照都要单独纳入备份清单。</p>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>确认 Velero 版本与 Kubernetes 版本兼容；打算升级 Kubernetes 时，先确认 Velero 已支持目标版本，别倒过来做。</li>
+<li>一个 S3 兼容的对象存储桶（提前创建），以及仅对该桶有读写权限的专用账号。</li>
+<li>一台能访问 API Server 的运维机，装好 kubectl 与 velero 命令行；要管多套集群就把各自的 kubeconfig 都放进去。</li>
+<li>备份窗口内业务能接受短暂的 IO 抖动，具体程度取决于卷的备份方式。</li>
+<li>记录当前集群的 StorageClass 清单——跨集群恢复时两边必须同名，否则卷挂不上。</li>
+</ul>
+<h2 id="架构与实现要点">架构与实现要点</h2>
+<p>服务端：以 Deployment 形式部署在集群内的独立命名空间，附带控制器，负责监听自定义资源并执行实际动作；节点侧另有 DaemonSet 组件读取卷数据（新版本称 node-agent，旧版本是 restic 守护进程，两者只能选其一）。</p>
+<p>客户端：运维机上的 velero 命令本身不传数据，只是把意图写成自定义资源提交给 API Server，再回来读取执行结果。</p>
+<p>一次备份的链路是：命令提交 Backup 对象 → 控制器监听到并开始采集 → 从 API Server 读取资源清单 → 资源清单与卷数据分头上传到对象存储 → 状态回写。备份、定时计划、恢复各自对应一种自定义资源，记录保存在 etcd 中。</p>
+<p>对象存储是唯一数据源：控制器会持续比对桶内数据与集群内记录，桶里找不到对应数据时，集群内的备份记录也会被一并清理。这个设计带来的直接后果是——桶被误删，备份记录会跟着消失。所以生产环境通常会再叠一层存储侧的跨站点同步或版本控制作为兜底。</p>
+<figure>
+  <img src="/img/docs/velero备份与恢复/velero备份与恢复-diagram.svg" alt="示意图" width="800" height="400" loading="lazy" decoding="async">
+  <figcaption>图 1　Velero 备份与恢复的数据流</figcaption>
+</figure>
+<h2 id="部署步骤">部署步骤</h2>
+<ol>
+<li>在运维机上准备好两套集群的访问方式：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#A0A0A0">export</span><span style="color:#FFF"> KUBECONFIG</span><span style="color:#A0A0A0">=</span><span style="color:#FFF">$HOME/.kube/cluster-a.yaml:$HOME/.kube/cluster-b.yaml</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> config</span><span style="color:#99FFE4"> get-contexts</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> config</span><span style="color:#99FFE4"> use-context</span><span style="color:#99FFE4"> cluster-a</span></span></code></pre>
+<p>把 export 写进 ~/.bashrc，避免每次登录重配。</p>
+<ol start="2">
+<li>创建命名空间：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> namespace</span><span style="color:#99FFE4"> velero-system</span></span></code></pre>
+<ol start="3">
+<li>
+<p>准备对象存储凭证。用只授权该桶的专用账号，把密钥对写成两行键值格式的文本文件，权限改成 600，放在运维机的受控目录；不要提交进代码仓库，也不要贴到工单或聊天里。</p>
+</li>
+<li>
+<p>安装服务端，以生产集群 A 为例：</p>
+</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> install</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --provider</span><span style="color:#99FFE4"> aws</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --plugins</span><span style="color:#99FFE4"> velero/velero-plugin-for-aws:v1.10.0</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --namespace</span><span style="color:#99FFE4"> velero-system</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --bucket</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">your-bucke</span><span style="color:#FFF">t</span><span style="color:#A0A0A0">></span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --use-volume-snapshots=true</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --default-volumes-to-fs-backup</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --backup-location-config</span><span style="color:#99FFE4"> region=us-east-1,s3ForcePathStyle=true,s3Url=http://192.0.2.30:8084</span></span></code></pre>
+<p>命令末尾还需要追加一个凭据文件参数，把上一步的文件注册成集群内的凭证对象。该参数在不同小版本上名称不完全统一，执行前先跑 <code>velero install --help</code> 核对，不要凭记忆写。</p>
+<ol start="5">
+<li>
+<p>容灾集群 B 用同一条命令再装一次，只把 s3Url 换成 B 侧可访问的存储入口地址，桶名保持完全一致。两边指向同一个桶，B 集群自然能看到 A 集群产生的备份。</p>
+</li>
+<li>
+<p>关键参数备查：</p>
+</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>参数</th><th>作用</th><th>说明</th></tr></thead><tbody><tr><td>—provider</td><td>声明存储插件类型</td><td>S3 兼容对象存储统一填 aws</td></tr><tr><td>—bucket</td><td>存放备份的桶</td><td>需提前创建，两套集群同名</td></tr><tr><td>—use-volume-snapshots</td><td>是否创建卷快照对象</td><td>后端具备 CSI 快照能力时设 true</td></tr><tr><td>—default-volumes-to-fs-backup</td><td>卷数据走文件级备份</td><td>旧版本对应 restic 相关参数，注意版本差异</td></tr><tr><td>—backup-location-config</td><td>桶的访问配置</td><td>region、s3ForcePathStyle、s3Url 三项即可</td></tr></tbody></table>
+<h2 id="备份操作">备份操作</h2>
+<p>按命名空间做一次性备份：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> backup</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> namespace-demo-</span><span style="color:#FFF">$(</span><span style="color:#FFC799">date</span><span style="color:#99FFE4"> +%Y%m%d%H%M</span><span style="color:#FFF">) </span><span style="color:#A0A0A0">\</span></span>
+<span class="line"><span style="color:#99FFE4">  --include-namespaces</span><span style="color:#99FFE4"> namespace-demo</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --default-volumes-to-fs-backup</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  -n</span><span style="color:#99FFE4"> velero-system</span></span></code></pre>
+<p>排除掉 Velero 自身与其它系统命名空间，做一次全集群备份：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> backup</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> all-ns-backup</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --exclude-namespaces</span><span style="color:#99FFE4"> velero-system,namespace-demo</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --snapshot-volumes=false</span></span></code></pre>
+<p>定时任务，每天凌晨 1 点执行、保留 72 小时：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> schedule</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> daily-ns</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --schedule="0 1 * * *"</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --ttl</span><span style="color:#99FFE4"> 72h</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --include-namespaces</span><span style="color:#99FFE4"> namespace-demo</span></span></code></pre>
+<p>定时任务产生的备份名为「计划名-时间戳」，恢复时按完整名字指定。</p>
+<p>常用筛选参数：</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>参数</th><th>含义</th></tr></thead><tbody><tr><td>—include-resources</td><td>只备份指定资源类型，例如 deployments</td></tr><tr><td>—exclude-resources</td><td>跳过指定资源类型</td></tr><tr><td>—selector</td><td>按标签挑对象，例如 app=web</td></tr><tr><td>—include-cluster-resources</td><td>是否包含集群级资源，可取 true / false / 不填</td></tr><tr><td>—ttl</td><td>保留时长，不写默认 30 天</td></tr></tbody></table>
+<p>批量备份可以按命名空间循环，把每个命名空间的输出分别重定向到日志文件，避免某个命名空间失败后静默跳过。</p>
+<h2 id="恢复操作">恢复操作</h2>
+<p>先说必须先记住的一条：恢复只会创建集群里不存在的对象，已存在的同名资源不会被覆盖，也不会退回旧版本。真要回滚，得先删掉现有资源再执行恢复，删除动作不可撤销。</p>
+<p>按备份点恢复指定命名空间：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> restore</span><span style="color:#99FFE4"> create</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --from-backup</span><span style="color:#99FFE4"> namespace-demo-20261021081500</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --include-namespaces</span><span style="color:#99FFE4"> namespace-demo</span></span></code></pre>
+<p>改名字恢复，避免与现有环境冲突：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> restore</span><span style="color:#99FFE4"> create</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --from-backup</span><span style="color:#99FFE4"> namespace-demo-20261021081500</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  --namespace-mappings</span><span style="color:#99FFE4"> namespace-demo:namespace-demo-restore</span></span></code></pre>
+<p>在容灾集群侧恢复，前提是已建好同名 StorageClass，否则 PVC 会一直 Pending：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> restore</span><span style="color:#99FFE4"> create</span><span style="color:#99FFE4"> --from-backup</span><span style="color:#99FFE4"> namespace-demo-20261021081500</span><span style="color:#99FFE4"> --restore-volumes</span></span></code></pre>
+<h2 id="验证">验证</h2>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> pods</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> velero-system</span></span>
+<span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> backup-location</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> velero-system</span></span>
+<span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> backup</span><span style="color:#99FFE4"> get</span><span style="color:#99FFE4"> -n</span><span style="color:#99FFE4"> velero-system</span></span>
+<span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> backup</span><span style="color:#99FFE4"> describe</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">backup-nam</span><span style="color:#FFF">e</span><span style="color:#A0A0A0">></span><span style="color:#99FFE4"> --details</span></span>
+<span class="line"><span style="color:#FFC799">velero</span><span style="color:#99FFE4"> backup</span><span style="color:#99FFE4"> logs</span><span style="color:#A0A0A0"> &#x3C;</span><span style="color:#99FFE4">backup-nam</span><span style="color:#FFF">e</span><span style="color:#A0A0A0">></span></span></code></pre>
+<ul>
+<li>存储位置状态应为 Available；不是的话，先排查桶入口地址、凭证权限和网络可达性。</li>
+<li>备份 Phase 为 Completed 才算完成；PartiallyFailed 要展开看是哪些资源或卷失败，不能只看总量。</li>
+<li>定期做恢复演练：拉一套测试命名空间，从最近的备份恢复出来，比对对象数量和 PVC 挂载情况。没有演练过的备份，只能算心理安慰。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li>桶是单点：对象存储被误删，备份记录会跟着消失。建议在存储侧开启版本控制或跨站点复制。</li>
+<li>恢复不覆盖：回滚前先删现有资源，务必反复确认目标命名空间，别在生产上删错。</li>
+<li>跨云迁移限制：不同云厂商之间持久卷没法直接搬，只能在新环境重建存储并单独同步数据。</li>
+<li>TTL 到期自动清理：重要保护点把 TTL 设长一些，或额外保留一份副本。</li>
+<li>个别资源不想被备份，直接打排除标签：</li>
+</ul>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> label</span><span style="color:#99FFE4"> namespace/namespace-demo</span><span style="color:#99FFE4"> velero.io/exclude-from-backup=true</span></span></code></pre>
+<p>卸载（只清 Velero 自己的自定义资源，桶里的数据保留）：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> delete</span><span style="color:#99FFE4"> namespace/velero-system</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> delete</span><span style="color:#99FFE4"> clusterrolebinding/velero-velero-system</span></span>
+<span class="line"><span style="color:#FFC799">kubectl</span><span style="color:#99FFE4"> delete</span><span style="color:#99FFE4"> crds</span><span style="color:#99FFE4"> -l</span><span style="color:#99FFE4"> component=velero</span></span></code></pre>
+<h2 id="参考截图">参考截图</h2>
+<figure>
+  <img src="/img/docs/velero备份与恢复/01.webp" alt="主站点与灾备站点的双活/主备关系" width="1100" height="293" loading="lazy" decoding="async">
+  <figcaption>图　主站点与灾备站点的双活/主备关系</figcaption>
+</figure>
+<figure>
+  <img src="/img/docs/velero备份与恢复/02.webp" alt="灾备能力分级：从集群内高可用到异地灾备" width="1100" height="680" loading="lazy" decoding="async">
+  <figcaption>图　灾备能力分级：从集群内高可用到异地灾备</figcaption>
+</figure>
+<figure>
+  <img src="/img/docs/velero备份与恢复/03.webp" alt="Velero 与 Kubernetes 版本兼容矩阵" width="937" height="402" loading="lazy" decoding="async">
+  <figcaption>图　Velero 与 Kubernetes 版本兼容矩阵</figcaption>
+</figure>
+<figure>
+  <img src="/img/docs/velero备份与恢复/04.webp" alt="应用、PVC 与对象存储之间的关系" width="1100" height="299" loading="lazy" decoding="async">
+  <figcaption>图　应用、PVC 与对象存储之间的关系</figcaption>
+</figure>
+<h2 id="常见问题">常见问题</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>现象</th><th>常见原因</th><th>处理思路</th></tr></thead><tbody><tr><td>存储位置不可用</td><td>桶地址不可达、region 不符、凭证无权限</td><td>在运维机上探测入口地址，核对桶策略与凭证</td></tr><tr><td>备份长时间 InProgress</td><td>卷数据量大、节点组件未就绪</td><td>看 backup logs，确认 node-agent 是否 Running</td></tr><tr><td>卷数据没备下来</td><td>未开文件级备份，或用了 HostPath</td><td>补开卷备份参数；HostPath 需换支持的卷类型</td></tr><tr><td>恢复后 PVC 一直 Pending</td><td>目标集群缺同名 StorageClass 或后端容量不足</td><td>先建 StorageClass，再确认存储侧可用容量</td></tr><tr><td>定时任务没按时触发</td><td>时区理解偏差、旧记录被 TTL 清掉</td><td>核对控制器时区与 —ttl 设置</td></tr></tbody></table> <nav class="post-nav" aria-label="上下篇"> <a href="/2024/08/05/运维手册/阿里云平台日常操作/"> <span class="label">← 上一篇</span> <span class="title">阿里云平台日常运维操作手册</span> </a> <a class="next" href="/2024/11/15/运维手册/oss证书替换/"> <span class="label">下一篇 →</span> <span class="title">OSS 自定义域名证书到期检查与替换</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「容器与云原生」其他文档</p> <ul> <li><a href="/2025/03/07/运维手册/trident-csi容器存储/">Trident CSI 容器存储接入手册</a></li><li><a href="/2026/01/30/运维手册/k8s集群新增节点初始化/">K8s 集群新增节点初始化清单</a></li><li><a href="/2025/07/01/运维手册/rancher工作负载标准化/">Rancher 工作负载标准化配置</a></li><li><a href="/2025/02/27/运维手册/rke2集群部署/">RKE2 高可用集群离线部署</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#架构与实现要点">架构与实现要点</a></li><li class="depth-2"><a href="#部署步骤">部署步骤</a></li><li class="depth-2"><a href="#备份操作">备份操作</a></li><li class="depth-2"><a href="#恢复操作">恢复操作</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#参考截图">参考截图</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

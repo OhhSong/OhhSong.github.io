@@ -1,0 +1,401 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>宿主机双网卡 bond 绑定配置 · ImsayingOhh</title><meta name="description" content="容器宿主机业务口与存储口双网卡聚合的配置流程，含前置清理、模式选型、验证与回滚。"><link rel="canonical" href="https://ohhsong.github.io/2025/02/08/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E5%AE%BF%E4%B8%BB%E6%9C%BA%E5%8F%8C%E7%BD%91%E5%8D%A1bond%E7%BB%91%E5%AE%9A/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="宿主机双网卡 bond 绑定配置 · ImsayingOhh"><meta property="og:description" content="容器宿主机业务口与存储口双网卡聚合的配置流程，含前置清理、模式选型、验证与回滚。"><meta property="og:url" content="https://ohhsong.github.io/2025/02/08/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E5%AE%BF%E4%B8%BB%E6%9C%BA%E5%8F%8C%E7%BD%91%E5%8D%A1bond%E7%BB%91%E5%AE%9A/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.BujS99Dg.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/network/">网络与传输</a>  </nav> <h1 class="post-title">宿主机双网卡 bond 绑定配置</h1> <p class="post-desc">容器宿主机业务口与存储口双网卡聚合的配置流程，含前置清理、模式选型、验证与回滚。</p> <div class="post-meta"> <time datetime="2025-02-08T01:59:52.000Z">2025年2月8日</time> <span class="dot" aria-hidden="true"></span> <span>5 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/Linux/">Linux</a><a class="tag" href="/tags/%E7%BD%91%E7%BB%9C/">网络</a><a class="tag" href="/tags/Bonding/">Bonding</a><a class="tag" href="/tags/%E9%AB%98%E5%8F%AF%E7%94%A8/">高可用</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/network/">网络与传输</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>把两块以上物理网卡聚合成一个逻辑接口，让宿主机同时获得带宽叠加、流量分担和单链路故障时的自动切换能力——这就是双网卡绑定要解决的问题。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>容器宿主机需要同时跑业务流量与存储流量，两条链路各自独立成组。</li>
+<li>关键节点服务器、高网络 IO 的服务器，单网线或单交换机端口故障不能导致整机失联。</li>
+<li>网络共享存储服务器，带宽需求超过单块网卡上限。</li>
+<li>承接搬迁机、挪用机，机器上残留了旧的绑定配置，需要清干净再重建。</li>
+</ul>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>至少两块同速率的物理网卡，且都已被系统识别、状态为 UP。</li>
+<li>交换机侧已按选定的模式完成配置。LACP 模式必须先在交换机上建好聚合口，两边模式不一致时链路起不来。</li>
+<li>有带外管理或本地终端。改网络配置过程中 SSH 随时可能断，纯远程操作风险很高。</li>
+<li>规划好两套网段：业务口一套，存储口一套，不要混用，也不要给两块聚合口配同一个网段。</li>
+<li>root 权限，且 NetworkManager 服务可用。</li>
+</ul>
+<h2 id="绑定模式怎么选">绑定模式怎么选</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>模式</th><th>特点</th><th>交换机侧要求</th></tr></thead><tbody><tr><td>lacp 动态链路聚合</td><td>按 802.3ad 协商，成员口共享同一速率，带宽可叠加，单口故障自动摘除</td><td>需支持 802.3ad 并建聚合口</td></tr><tr><td>activebackup 主备</td><td>同一时刻只有主口转发，主口故障后切到备口，提供冗余但不叠加带宽</td><td>无需交换机特殊配置</td></tr><tr><td>roundrobin 轮询</td><td>按顺序轮流发包，提供负载与容错，乱序风险相对高</td><td>需建聚合口</td></tr><tr><td>loadbalance 负载均衡</td><td>按源目地址或 MAC 计算选路，分担流量</td><td>需建聚合口</td></tr><tr><td>broadcast 广播容错</td><td>每个报文从所有成员口各发一份，容错最强、浪费带宽</td><td>需建聚合口</td></tr></tbody></table>
+<p>生产环境的宿主机优先选 lacp：带宽能叠加，单口故障只降速不断网。只有在交换机不支持 802.3ad、或者两块网卡分属不同交换机且无法做跨设备聚合时，才退回 activebackup。</p>
+<p>另外注意发行版差异：早期 RHEL 6 时代统一用 bond，RHEL 7/8 官方推荐 team，更新的发行版和 NetworkManager 对 bonding 的支持又更完整。具体用 team 还是 bond，按实际发行版文档选，本文以 team 为例，操作思路对 bond 同样适用。</p>
+<h2 id="前置清理">前置清理</h2>
+<p>这一步最容易被跳过，但残留的配置会让新绑定行为诡异，一定要先查干净。</p>
+<ol>
+<li>查看当前的接口与地址，区分物理网卡和虚拟网卡：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> a</span></span></code></pre>
+<p>状态为 DOWN 且没有地址的虚拟接口，基本都是上次配置留下的残渣，逐个删除。</p>
+<ol start="2">
+<li>查看现有的连接与绑定策略：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> show</span></span></code></pre>
+<p>除物理网卡之外的历史绑定策略，确认不在用后全部删除。</p>
+<ol start="3">
+<li>检查配置文件目录：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">ls</span><span style="color:#99FFE4"> -l</span><span style="color:#99FFE4"> /etc/sysconfig/network-scripts/</span></span></code></pre>
+<p>残留的 ifcfg 文件里保存着旧设备的绑定参数，不在用的直接删掉，避免和新建的配置打架。</p>
+<figure>
+  <img src="/img/docs/宿主机双网卡bond绑定/宿主机双网卡bond绑定-diagram.svg" alt="示意图" width="800" height="400" loading="lazy" decoding="async">
+  <figcaption>图 1　业务与存储双网卡绑定拓扑</figcaption>
+</figure>
+<h2 id="操作步骤">操作步骤</h2>
+<ol>
+<li>创建业务口聚合接口。示例用 lacp 模式，接口名 team0，两块物理口 ens1f0、ens2f0 作为成员：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> type</span><span style="color:#99FFE4"> team</span><span style="color:#99FFE4"> con-name</span><span style="color:#99FFE4"> team0</span><span style="color:#99FFE4"> ifname</span><span style="color:#99FFE4"> team0</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  config</span><span style="color:#99FFE4"> '{"runner":{"name":"lacp"}}'</span></span></code></pre>
+<ol start="2">
+<li>把成员口挂到聚合接口下：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> type</span><span style="color:#99FFE4"> team-slave</span><span style="color:#99FFE4"> con-name</span><span style="color:#99FFE4"> team0-p1</span><span style="color:#99FFE4"> ifname</span><span style="color:#99FFE4"> ens1f0</span><span style="color:#99FFE4"> master</span><span style="color:#99FFE4"> team0</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> type</span><span style="color:#99FFE4"> team-slave</span><span style="color:#99FFE4"> con-name</span><span style="color:#99FFE4"> team0-p2</span><span style="color:#99FFE4"> ifname</span><span style="color:#99FFE4"> ens2f0</span><span style="color:#99FFE4"> master</span><span style="color:#99FFE4"> team0</span></span></code></pre>
+<ol start="3">
+<li>先把手动模式打开，再写地址。顺序反了，部分 NetworkManager 版本会报错：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> modify</span><span style="color:#99FFE4"> team0</span><span style="color:#99FFE4"> ipv4.method</span><span style="color:#99FFE4"> manual</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> modify</span><span style="color:#99FFE4"> team0</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  ipv4.addresses</span><span style="color:#99FFE4"> 192.0.2.10/24</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  ipv4.gateway</span><span style="color:#FFC799"> 192.0.2.1</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  ipv4.dns</span><span style="color:#FFC799"> 192.0.2.53</span></span></code></pre>
+<ol start="4">
+<li>启用接口：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> up</span><span style="color:#99FFE4"> team0-p1</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> up</span><span style="color:#99FFE4"> team0-p2</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> up</span><span style="color:#99FFE4"> team0</span></span></code></pre>
+<ol start="5">
+<li>存储口按同样步骤建第二组聚合接口，用另一对物理口，配另一段地址，且不要配网关（一台机器只留一个默认网关，多网关会导致回包路径混乱）：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> type</span><span style="color:#99FFE4"> team</span><span style="color:#99FFE4"> con-name</span><span style="color:#99FFE4"> team1</span><span style="color:#99FFE4"> ifname</span><span style="color:#99FFE4"> team1</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">  config</span><span style="color:#99FFE4"> '{"runner":{"name":"lacp"}}'</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> type</span><span style="color:#99FFE4"> team-slave</span><span style="color:#99FFE4"> con-name</span><span style="color:#99FFE4"> team1-p1</span><span style="color:#99FFE4"> ifname</span><span style="color:#99FFE4"> ens1f1</span><span style="color:#99FFE4"> master</span><span style="color:#99FFE4"> team1</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> add</span><span style="color:#99FFE4"> type</span><span style="color:#99FFE4"> team-slave</span><span style="color:#99FFE4"> con-name</span><span style="color:#99FFE4"> team1-p2</span><span style="color:#99FFE4"> ifname</span><span style="color:#99FFE4"> ens2f1</span><span style="color:#99FFE4"> master</span><span style="color:#99FFE4"> team1</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> modify</span><span style="color:#99FFE4"> team1</span><span style="color:#99FFE4"> ipv4.method</span><span style="color:#99FFE4"> manual</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> modify</span><span style="color:#99FFE4"> team1</span><span style="color:#99FFE4"> ipv4.addresses</span><span style="color:#99FFE4"> 192.0.2.20/24</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> up</span><span style="color:#99FFE4"> team1</span></span></code></pre>
+<ol start="6">
+<li>固化启动参数。查到生成的 ifcfg 文件，把引导协议改成静态：</li>
+</ol>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> BOOTPROTO</span><span style="color:#99FFE4"> /etc/sysconfig/network-scripts/ifcfg-team0</span></span>
+<span class="line"><span style="color:#8B8B8B94"># 把 none 改为 static，保证重启后不会重新获取地址</span></span></code></pre>
+<p>如果是手工维护 ifcfg，记得地址、掩码、网关三处都写全，只写地址不写掩码同样会出问题。</p>
+<h2 id="验证">验证</h2>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> a</span><span style="color:#99FFE4"> show</span><span style="color:#99FFE4"> team0</span></span>
+<span class="line"><span style="color:#FFC799">teamdctl</span><span style="color:#99FFE4"> team0</span><span style="color:#99FFE4"> state</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> show</span><span style="color:#99FFE4"> team0</span></span>
+<span class="line"><span style="color:#FFC799">ping</span><span style="color:#99FFE4"> -I</span><span style="color:#99FFE4"> team0</span><span style="color:#99FFE4"> -c</span><span style="color:#FFC799"> 4</span><span style="color:#FFC799"> 192.0.2.1</span></span></code></pre>
+<ul>
+<li><code>teamdctl</code> 输出里 runner 应为 lacp，两个成员的 link 状态都是 up。</li>
+<li><code>ip a</code> 中聚合接口为 UP，地址与规划一致，业务口与存储口分属不同网段。</li>
+<li>用 <code>ip route</code> 确认只有一条默认路由，指向业务网关。</li>
+<li>收敛验证：在业务低峰期拔掉其中一根网线，观察 ping 丢包数量，预期只丢一两个包即恢复；再把网线插回，确认端口自动恢复 up。</li>
+<li>重启一次机器，复查接口地址、路由与运行模式，确认配置持久化生效。</li>
+</ul>
+<h2 id="风险与回滚">风险与回滚</h2>
+<ul>
+<li>最大的风险是操作中断网失联。务必在带外或本地终端执行，并提前把回滚命令准备好。</li>
+<li>LACP 与交换机配置不一致时，链路会一直协商不上，表现为接口 UP 但不通。先确认交换机侧聚合口模式与成员端口，再查主机侧。</li>
+<li>同一聚合组内成员口的速率、双工、MTU 必须一致，否则部分流量会异常。</li>
+<li>回滚方式，删除新建的连接与接口并恢复原有配置：</li>
+</ul>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> down</span><span style="color:#99FFE4"> team0</span></span>
+<span class="line"><span style="color:#FFC799">nmcli</span><span style="color:#99FFE4"> connection</span><span style="color:#99FFE4"> delete</span><span style="color:#99FFE4"> team0</span><span style="color:#99FFE4"> team0-p1</span><span style="color:#99FFE4"> team0-p2</span></span>
+<span class="line"><span style="color:#FFC799">ip</span><span style="color:#99FFE4"> a</span></span></code></pre>
+<ul>
+<li>BOOTPROTO 没改成 static 是重启后地址漂移的常见原因，改完一定复查该参数。</li>
+</ul>
+<h2 id="常见问题">常见问题</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>现象</th><th>常见原因</th><th>处理思路</th></tr></thead><tbody><tr><td>聚合接口起不来</td><td>成员口被别的连接占用，或残留旧绑定</td><td>清理旧连接与 ifcfg 文件后重建</td></tr><tr><td>接口 UP 但不通</td><td>lacp 与交换机模式不匹配</td><td>核对交换机聚合口配置，或临时改 activebackup 验证</td></tr><tr><td>teamdctl 显示成员 degraded</td><td>单根网线、光模块或交换机端口故障</td><td>更换线缆或端口，检查光功率</td></tr><tr><td>重启后配置丢失</td><td>BOOTPROTO 非 static，或 NetworkManager 未托管该接口</td><td>改静态配置，确认接口在托管列表内</td></tr><tr><td>只有一条链路有流量</td><td>模式为 activebackup，或负载哈希只命中一个口</td><td>属正常现象，按模式特性理解，必要时调整哈希策略</td></tr><tr><td>两块口配了同一网段</td><td>规划错误</td><td>业务与存储分网段，重新分配地址</td></tr></tbody></table> <nav class="post-nav" aria-label="上下篇"> <a href="/2024/12/17/运维手册/centos7安全基线/"> <span class="label">← 上一篇</span> <span class="title">CentOS 7 安全基线核查与落地清单</span> </a> <a class="next" href="/2025/02/27/运维手册/rke2集群部署/"> <span class="label">下一篇 →</span> <span class="title">RKE2 高可用集群离线部署</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「网络与传输」其他文档</p> <ul> <li><a href="/2025/05/07/运维手册/大文件跨环境传输应急/">大文件跨环境传输应急指引</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#绑定模式怎么选">绑定模式怎么选</a></li><li class="depth-2"><a href="#前置清理">前置清理</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>

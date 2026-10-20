@@ -1,0 +1,583 @@
+<!DOCTYPE html><html lang="zh-CN"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>麒麟 V10 SP3 安全基线核查清单 · ImsayingOhh</title><meta name="description" content="按初始化、SSH、审计、权限与口令五组，整理麒麟 V10 SP3 2403 的核查项与整改命令。"><link rel="canonical" href="https://ohhsong.github.io/2026/03/26/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E9%BA%92%E9%BA%9F%E5%AE%89%E5%85%A8%E5%9F%BA%E7%BA%BF/"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate" type="application/rss+xml" title="ImsayingOhh" href="/rss.xml"><meta name="author" content="Ohh"><meta name="theme-color" content="#faf7f1"><meta property="og:type" content="article"><meta property="og:title" content="麒麟 V10 SP3 安全基线核查清单 · ImsayingOhh"><meta property="og:description" content="按初始化、SSH、审计、权限与口令五组，整理麒麟 V10 SP3 2403 的核查项与整改命令。"><meta property="og:url" content="https://ohhsong.github.io/2026/03/26/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/%E9%BA%92%E9%BA%9F%E5%AE%89%E5%85%A8%E5%9F%BA%E7%BA%BF/"><meta property="og:image" content="https://ohhsong.github.io/img/TX.webp"><meta property="og:site_name" content="ImsayingOhh"><meta property="og:locale" content="zh_CN"><meta name="twitter:card" content="summary_large_image"><script>
+      (function () {
+        try {
+          var forced = new URLSearchParams(location.search).get('theme');
+          var stored = localStorage.getItem('theme');
+          var theme = forced || stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          if (forced === 'dark' || forced === 'light') localStorage.setItem('theme', forced);
+          document.documentElement.dataset.theme = theme;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script><link rel="stylesheet" href="/_astro/_path_.BujS99Dg.css"></head> <body> <a class="skip-link" href="#main">跳到正文</a> <header class="site-header"> <div class="container header-inner"> <a class="brand" href="/"> <span class="brand-mark" aria-hidden="true">O</span> <span>ImsayingOhh</span> </a> <nav class="nav" aria-label="主导航"> <a class="nav-link" href="/archives/"> 文章 </a><a class="nav-link" href="/docs/"> 文档 </a><a class="nav-link" href="/tags/"> 标签 </a><a class="nav-link" href="/about/"> 关于 </a><a class="nav-link" href="/link/"> 友链 </a> </nav> <div class="header-actions"> <button class="icon-btn search-btn" type="button" data-search-open aria-label="搜索文章"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> </button> <dialog class="search-dialog" data-search-dialog aria-label="站内搜索"> <div class="search-panel"> <div class="search-field"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"> <circle cx="11" cy="11" r="7"></circle> <path d="m20 20-3.5-3.5"></path> </svg> <input type="search" class="search-input" placeholder="搜索标题、摘要或标签…" autocomplete="off" spellcheck="false" data-search-input> <kbd class="search-kbd">Esc</kbd> </div> <div class="search-results" data-search-results> <p class="search-hint">输入关键词开始搜索</p> </div> </div> </dialog>  <script>
+  (function () {
+    var dialog = document.querySelector('[data-search-dialog]');
+    var opener = document.querySelector('[data-search-open]');
+    var input = document.querySelector('[data-search-input]');
+    var results = document.querySelector('[data-search-results]');
+    if (!dialog || !opener || !input || !results) return;
+
+    var index = null;
+    var loading = null;
+
+    function load() {
+      if (index) return Promise.resolve(index);
+      if (loading) return loading;
+      loading = fetch('/search.json')
+        .then(function (r) { return r.json(); })
+        .then(function (data) { index = data; return data; })
+        .catch(function () { index = []; return index; });
+      return loading;
+    }
+
+    function score(item, terms) {
+      var haystack = [item.title, item.description, item.tags.join(' '), item.categories.join(' ')]
+        .join(' ')
+        .toLowerCase();
+      var ok = terms.every(function (t) { return haystack.indexOf(t) >= 0; });
+      if (!ok) return -1;
+      var s = 0;
+      terms.forEach(function (t) {
+        if (item.title.toLowerCase().indexOf(t) >= 0) s += 3;
+        if (item.description.toLowerCase().indexOf(t) >= 0) s += 1;
+      });
+      return s;
+    }
+
+    function render(query) {
+      var q = query.trim().toLowerCase();
+      if (!q) {
+        results.innerHTML = '<p class="search-hint">输入关键词开始搜索</p>';
+        return;
+      }
+      var terms = q.split(/\s+/).filter(Boolean);
+      var hits = (index || [])
+        .map(function (item) { return { item: item, s: score(item, terms) }; })
+        .filter(function (x) { return x.s >= 0; })
+        .sort(function (a, b) { return b.s - a.s; })
+        .slice(0, 8);
+
+      if (!hits.length) {
+        results.innerHTML = '<p class="search-empty">没有找到匹配的文章</p>';
+        return;
+      }
+
+      results.innerHTML = hits
+        .map(function (x, i) {
+          var item = x.item;
+          return (
+            '<a class="search-item' + (i === 0 ? ' active' : '') + '" href="' + item.url + '">' +
+            '<span class="search-item-title">' + escapeHtml(item.title) + '</span>' +
+            (item.description ? '<span class="search-item-desc">' + escapeHtml(item.description) + '</span>' : '') +
+            '<span class="search-item-meta">' + item.date + ' · ' + escapeHtml(item.categories.join(' / ') || '未分类') + '</span>' +
+            '</a>'
+          );
+        })
+        .join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function open() {
+      dialog.showModal();
+      load().then(function () { render(input.value); });
+      setTimeout(function () { input.focus(); }, 30);
+    }
+
+    opener.addEventListener('click', open);
+
+    input.addEventListener('input', function () { render(input.value); });
+
+    input.addEventListener('keydown', function (e) {
+      var items = Array.prototype.slice.call(results.querySelectorAll('.search-item'));
+      if (!items.length) return;
+      var current = items.findIndex(function (el) { return el.classList.contains('active'); });
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        var next = e.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+        items.forEach(function (el) { el.classList.remove('active'); });
+        items[next].classList.add('active');
+        items[next].scrollIntoView({ block: 'nearest' });
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        window.location.href = items[Math.max(current, 0)].getAttribute('href');
+      }
+    });
+
+    dialog.addEventListener('click', function (e) {
+      if (e.target === dialog) dialog.close();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      var isTyping = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+      if ((e.key === 'k' && (e.metaKey || e.ctrlKey)) || (e.key === '/' && !isTyping)) {
+        e.preventDefault();
+        open();
+      }
+    });
+  })();
+</script> <a class="icon-btn" href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer" aria-label="GitHub"> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">    <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 18.9 3 4.9 4.9 0 0 0 18.8 0S17.6-.4 15 1.3a13.4 13.4 0 0 0-6 0C6.4-.4 5.2 0 5.2 0a4.9 4.9 0 0 0-.1 3A5.2 5.2 0 0 0 3.7 6.8c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"></path>    </svg> </a> <button class="icon-btn" type="button" data-theme-toggle aria-label="切换深色模式"> <span class="icon-sun"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">  <circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path>      </svg></span> <span class="icon-moon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">   <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.8 6.8 0 0 0 10.5 10.5Z"></path>     </svg></span> </button> </div> </div> </header> <main id="main">  <article> <header class="post-header"> <div class="container"> <nav class="breadcrumb" aria-label="面包屑">  <a href="/">首页</a> <span>/</span> <a href="/docs/">文档</a> <span>/</span> <a href="/docs/os-security/">操作系统与安全基线</a>  </nav> <h1 class="post-title">麒麟 V10 SP3 安全基线核查清单</h1> <p class="post-desc">按初始化、SSH、审计、权限与口令五组，整理麒麟 V10 SP3 2403 的核查项与整改命令。</p> <div class="post-meta"> <time datetime="2026-03-26T02:45:56.000Z">2026年3月26日</time> <span class="dot" aria-hidden="true"></span> <span>11 分钟阅读</span>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/categories/%E8%BF%90%E7%BB%B4%E6%89%8B%E5%86%8C/">运维手册</a> <a class="tag" href="/tags/%E9%BA%92%E9%BA%9F/">麒麟</a><a class="tag" href="/tags/%E5%AE%89%E5%85%A8%E5%9F%BA%E7%BA%BF/">安全基线</a><a class="tag" href="/tags/Linux/">Linux</a>  <span class="dot" aria-hidden="true"></span> <a class="tag" href="/docs/os-security/">操作系统与安全基线</a>  </div> </div> </header> <div class="container">  <div class="post-layout"> <div class="prose"> <h2 id="一句话定位">一句话定位</h2>
+<p>安全基线不是交差的表格，而是能落进脚本、能被复查、也能退回的开关。麒麟 V10 SP3 2403 的条目不难，难的是顺序：先定形态，再收服务面，然后补审计留痕，最后动口令权限。顺序反了，容易在改 SSH 或认证栈时把自己锁在门外。</p>
+<h2 id="适用场景">适用场景</h2>
+<ul>
+<li>新装麒麟 V10 SP3 2403 服务器上线前的初始化加固；</li>
+<li>存量节点等保、合规审计后的集中整改；</li>
+<li>批量下发基线脚本前逐项比对并确认例外；</li>
+<li>从 CentOS 迁移到麒麟，核对同名配置文件的路径与取值差异。</li>
+</ul>
+<p>数据库专用机、容器宿主机等特殊节点要按业务裁剪，基线是下限，不是模板。</p>
+<h2 id="前置条件">前置条件</h2>
+<ul>
+<li>已完成最小化安装，根分区建议用 LVM 便于打快照；</li>
+<li>内网软件源可用，能安装审计与访问控制相关包；</li>
+<li>保留 root 本地控制台会话，或确认带外管理通道可用；</li>
+<li>有变更窗口，审计规则与内核参数需重启才完全生效；</li>
+<li>变更前统一备份配置，下文改动都假定有回退文件。</li>
+</ul>
+<figure>
+  <img src="/img/docs/麒麟安全基线/麒麟安全基线-diagram.svg" alt="示意图" width="760" height="552" loading="lazy" decoding="async">
+  <figcaption>图 1　麒麟 V10 基线落地顺序</figcaption>
+</figure>
+<h2 id="操作步骤">操作步骤</h2>
+<h3 id="基线项总览">基线项总览</h3>
+<p>下表按整改顺序列出覆盖的核查项，检查命令按”改完之后应满足”的方向写，逐条跑一遍就是一份差距清单。</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>项目</th><th>建议值</th><th>检查命令</th><th>风险等级</th></tr></thead><tbody><tr><td>内网软件源</td><td>baseurl 指向内网仓库</td><td><code>grep -E 'baseurl|gpgcheck' /etc/yum.repos.d/kylin_x86_64.repo</code></td><td>中</td></tr><tr><td>防火墙</td><td>关闭并禁用（上游有边界过滤）</td><td><code>systemctl is-active firewalld</code></td><td>高</td></tr><tr><td>SSH 端口</td><td>非 22，例如 42222</td><td><code>grep -n '^Port' /etc/ssh/sshd_config</code></td><td>中</td></tr><tr><td>SSH 日志级别</td><td>INFO</td><td><code>grep -n LogLevel /etc/ssh/sshd_config</code></td><td>低</td></tr><tr><td>SSH 最大尝试</td><td>≤4 次</td><td><code>grep -n MaxAuthTries /etc/ssh/sshd_config</code></td><td>中</td></tr><tr><td>多 IP 绑定</td><td>off</td><td><code>grep multi /etc/host.conf</code></td><td>中</td></tr><tr><td>可疑包记录</td><td>1</td><td><code>sysctl net.ipv4.conf.all.log_martians</code></td><td>低</td></tr><tr><td>sudo 日志</td><td>已启用</td><td><code>grep -n logfile /etc/sudoers</code></td><td>中</td></tr><tr><td>sudo 伪终端</td><td>use_pty</td><td><code>grep -n use_pty /etc/sudoers</code></td><td>中</td></tr><tr><td>历史命令条数</td><td>100 条</td><td><code>grep '^HISTSIZE' /etc/profile</code></td><td>低</td></tr><tr><td>操作留痕文件</td><td>已启用</td><td><code>grep -n HISTORY_FILE /etc/profile</code></td><td>中</td></tr><tr><td>审计开关</td><td>audit=1</td><td><code>cat /proc/cmdline</code></td><td>高</td></tr><tr><td>auditd 自启</td><td>enabled</td><td><code>systemctl is-enabled auditd</code></td><td>中</td></tr><tr><td>审计规则</td><td>账号、模块、时间、删除已覆盖</td><td><code>auditctl -l</code></td><td>中</td></tr><tr><td>审计存储阈值</td><td>容量约 25%</td><td><code>grep -w space_left /etc/audit/auditd.conf</code></td><td>中</td></tr><tr><td>命令行超时</td><td>1800 秒</td><td><code>grep -n TMOUT /etc/profile</code></td><td>低</td></tr><tr><td>su 限制</td><td>仅 wheel 组可用</td><td><code>grep -v '^#' /etc/pam.d/su</code></td><td>高</td></tr><tr><td>时间同步</td><td>每 10 分钟一次</td><td><code>crontab -l</code></td><td>中</td></tr><tr><td>core dump</td><td>已关闭</td><td><code>cat /proc/sys/kernel/core_pattern</code></td><td>中</td></tr><tr><td>守护进程 umask</td><td>027</td><td><code>grep umask /etc/sysconfig/init</code></td><td>中</td></tr><tr><td>SELinux</td><td>permissive</td><td><code>getenforce</code></td><td>高</td></tr><tr><td>启动目录权限</td><td>744</td><td><code>stat -c '%a' /etc/systemd/system</code></td><td>中</td></tr><tr><td>默认 umask</td><td>027</td><td><code>grep -n umask /etc/bashrc</code></td><td>中</td></tr><tr><td>口令长度</td><td>≥12 位</td><td><code>grep -n minlen /etc/security/pwquality.conf</code></td><td>高</td></tr><tr><td>口令字符类</td><td>4 类</td><td><code>grep -n minclass /etc/security/pwquality.conf</code></td><td>高</td></tr><tr><td>字典与相似性检查</td><td>开启</td><td><code>grep -nE 'dictcheck|usercheck' /etc/security/pwquality.conf</code></td><td>中</td></tr><tr><td>登录失败锁定</td><td>5 次 / 900 秒</td><td><code>grep -n 'deny=5' /etc/pam.d/system-auth</code></td><td>高</td></tr><tr><td>日志文件权限</td><td>组无写执行、其他无权限</td><td><code>find /var/log -type f -perm /027</code></td><td>中</td></tr><tr><td>维护模式入口</td><td>已限制</td><td><code>grep -n rescue /boot/efi/EFI/kylin/grub.cfg</code></td><td>高</td></tr></tbody></table>
+<h3 id="第一步安装形态与软件源">第一步：安装形态与软件源</h3>
+<p>最小化安装减少默认账号、组件与监听端口，后续检查成本更低。装完先确认版本与分区，根目录留足余量，避免审计日志写满：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#99FFE4"> /etc/kylin-release</span></span>
+<span class="line"><span style="color:#FFC799">df</span><span style="color:#99FFE4"> -hT</span></span></code></pre>
+<p>内网源按实际仓库地址改写，改前留备份：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cd</span><span style="color:#99FFE4"> /etc/yum.repos.d</span></span>
+<span class="line"><span style="color:#FFC799">cp</span><span style="color:#99FFE4"> -a</span><span style="color:#99FFE4"> kylin_x86_64.repo</span><span style="color:#99FFE4"> kylin_x86_64.repo.bak</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's#^baseurl=.*#baseurl=http://192.0.2.10/kylin/V10SP3-2403/os/$basearch/#'</span><span style="color:#99FFE4"> kylin_x86_64.repo</span></span>
+<span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> -nE</span><span style="color:#99FFE4"> 'baseurl|gpgcheck'</span><span style="color:#99FFE4"> kylin_x86_64.repo</span></span></code></pre>
+<p>关闭签名校验能让不可签名的内网源工作，但源被篡改时无从发现。只有镜像由可信渠道同步、网络侧也限制来源时，才登记为例外；能维护签名就别关。</p>
+<h3 id="第二步网络与服务面">第二步：网络与服务面</h3>
+<p>基线关闭并禁用防火墙，前提是上游有边界过滤且主机不直接暴露公网。不成立就保留防火墙、只放行必要端口，并在基线记录里写明偏差。</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> stop</span><span style="color:#99FFE4"> firewalld</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> disable</span><span style="color:#99FFE4"> firewalld</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> is-active</span><span style="color:#99FFE4"> firewalld</span></span></code></pre>
+<p>关闭多 IP 绑定，避免一条解析记录带来多个地址；打开可疑包记录，把源地址不可路由的包写进内核日志，便于发现扫描与欺骗。后者抬高日志量，需配合轮转与容量告警：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> multi</span><span style="color:#99FFE4"> /etc/host.conf</span></span>
+<span class="line"><span style="color:#FFC799">echo</span><span style="color:#99FFE4"> 'multi off'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/host.conf</span></span>
+<span class="line"><span style="color:#FFC799">sysctl</span><span style="color:#99FFE4"> -w</span><span style="color:#99FFE4"> net.ipv4.conf.all.log_martians=</span><span style="color:#FFC799">1</span></span>
+<span class="line"><span style="color:#FFC799">printf</span><span style="color:#99FFE4"> '%s\n'</span><span style="color:#99FFE4"> 'net.ipv4.conf.all.log_martians=1'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/sysctl.conf</span></span></code></pre>
+<p>传输工具按需安装，<code>lrzsz</code>、<code>net-tools</code> 装机即用；<code>telnet</code> 与 <code>ftp</code> 是明文协议，只在隔离网段临时排障，用完停服。确需 FTP 时用 chroot 限制目录，但 <code>allow_writeable_chroot</code> 会削弱隔离，能用 SFTP 就不用 FTP。</p>
+<h3 id="第三步ssh-与登录入口">第三步：SSH 与登录入口</h3>
+<p>改前备份，把端口、日志级别与尝试次数一次改到位：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFF">S</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">/etc/ssh/sshd_config</span></span>
+<span class="line"><span style="color:#FFC799">cp</span><span style="color:#99FFE4"> -a</span><span style="color:#FFF"> $S $S</span><span style="color:#99FFE4">.bak</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's/^#\?LogLevel.*/LogLevel INFO/'</span><span style="color:#FFF"> $S</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's/^#\?MaxAuthTries.*/MaxAuthTries 4/'</span><span style="color:#FFF"> $S</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's/^#\?Port .*/Port 42222/'</span><span style="color:#FFF"> $S</span></span>
+<span class="line"><span style="color:#FFC799">sshd</span><span style="color:#99FFE4"> -t</span><span style="color:#FFF"> &#x26;&#x26; </span><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> restart</span><span style="color:#99FFE4"> sshd</span></span></code></pre>
+<p>注意：SSH 对同一参数取首次出现的值，残留旧行会让新值失效，验证要看 <code>sshd -T</code> 而不是只看文件；改端口前确认防火墙与安全组已放通，并保留一个已登录会话。</p>
+<p>登录横幅写清行为会被监控，既是合规项也起警示作用：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">printf</span><span style="color:#99FFE4"> '%s\n'</span><span style="color:#99FFE4"> 'Login success. All activity is monitored and recorded.'</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/motd</span></span>
+<span class="line"><span style="color:#FFC799">chmod</span><span style="color:#FFC799"> 644</span><span style="color:#99FFE4"> /etc/motd</span></span></code></pre>
+<p><code>HostKeyAlgorithms</code> 基线倾向注释掉，不强制指定主机密钥算法：兼容性好，老客户端不会握手失败，代价是可协商算法变宽。客户端可控时建议保留强限定。</p>
+<h3 id="第四步sudo-日志与命令留痕">第四步：sudo 日志与命令留痕</h3>
+<p>sudo 的两项配置是审计基础：提权写进独立日志，强制经由伪终端执行，避免命令绕过会话记录。改 <code>/etc/sudoers</code> 前先 <code>visudo -c</code> 校验，加入：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="text"><code><span class="line"><span>Defaults logfile=/var/log/sudo.log</span></span>
+<span class="line"><span>Defaults use_pty</span></span></code></pre>
+<p>再让日志服务把 <code>local2.debug</code> 写入同一文件。命令留痕依托历史记录参数与一个独立追加文件：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/profile</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">HISTSIZE=100</span></span>
+<span class="line"><span style="color:#99FFE4">HISTTIMEFORMAT="%F %T %u "</span></span>
+<span class="line"><span style="color:#99FFE4">export HISTORY_FILE=/var/log/useraudit.log</span></span>
+<span class="line"><span style="color:#99FFE4">export PROMPT_COMMAND='printf "%s %s %s\n" "$(date "+%F %T")" "$(who am i)" "$(history 1)" >> "$HISTORY_FILE"'</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span></code></pre>
+<p>该文件对所有登录用户可写，基线通常放到 666，等于谁都能改自己的历史记录，这是”可追溯优先于不可篡改”的取舍。有条件时改用只追加属性或把记录送往集中平台。</p>
+<h3 id="第五步审计">第五步：审计</h3>
+<p>审计分三层：内核参数保证默认开启，规则文件定义记录什么，存储阈值决定写满后怎么办。先确认引导参数：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#99FFE4"> /proc/cmdline</span></span>
+<span class="line"><span style="color:#FFC799">find</span><span style="color:#99FFE4"> /boot</span><span style="color:#99FFE4"> -name</span><span style="color:#99FFE4"> grub.cfg</span></span></code></pre>
+<p>在 UEFI 引导配置的内核行补 <code>audit=1</code>，与相邻参数留空格；再设 auditd 自启并重启：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> enable</span><span style="color:#99FFE4"> auditd</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> is-enabled</span><span style="color:#99FFE4"> auditd</span></span>
+<span class="line"><span style="color:#FFC799">auditctl</span><span style="color:#99FFE4"> -l</span></span>
+<span class="line"><span style="color:#FFC799">reboot</span></span></code></pre>
+<p>规则按类别拆文件，下面以模块、账号、时间三类为例；文件删除与网络环境变更按同样方式补上，删除事件记得带 <code>auid>=1000</code> 过滤：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/audit/rules.d/10-kmod.rules</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">-w /sbin/insmod -p x -k kmod</span></span>
+<span class="line"><span style="color:#99FFE4">-w /sbin/rmmod -p x -k kmod</span></span>
+<span class="line"><span style="color:#99FFE4">-w /sbin/modprobe -p x -k kmod</span></span>
+<span class="line"><span style="color:#99FFE4">-a always,exit -F arch=b64 -S init_module -S delete_module -k kmod</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/audit/rules.d/20-account.rules</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">-w /etc/passwd -p wa -k account</span></span>
+<span class="line"><span style="color:#99FFE4">-w /etc/shadow -p wa -k account</span></span>
+<span class="line"><span style="color:#99FFE4">-w /etc/group -p wa -k account</span></span>
+<span class="line"><span style="color:#99FFE4">-w /etc/gshadow -p wa -k account</span></span>
+<span class="line"><span style="color:#99FFE4">-w /etc/security/opasswd -p wa -k account</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"></span>
+<span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /etc/audit/rules.d/30-clock.rules</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">-a always,exit -F arch=b64 -S settimeofday -S adjtimex -S clock_settime -k clock</span></span>
+<span class="line"><span style="color:#99FFE4">-w /etc/localtime -p wa -k clock</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span></code></pre>
+<p>删除事件带 <code>auid>=1000</code> 可减少系统进程噪声；网络变更要覆盖主机名、域名与解析文件。64 位系统上 <code>arch=b32</code> 的规则不要删，兼容性靠它兜底。规则写完重启 auditd 生效。</p>
+<p>存储阈值按审计分区容量的四分之一估算，换算成 MB 写入配置：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">df</span><span style="color:#99FFE4"> -h</span><span style="color:#99FFE4"> /var/log/audit</span></span>
+<span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> -w</span><span style="color:#99FFE4"> space_left</span><span style="color:#99FFE4"> /etc/audit/auditd.conf</span></span></code></pre>
+<p>例如 500 GB 分区取 128000 左右。阈值过低频繁告警，过高丢日志；<code>space_left_action</code> 用告警而非关机。进程记账用 psacct 补足，<code>lastcomm</code> 能看到执行记录。安全事件日志单独归档：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">cat</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/rsyslog.conf</span><span style="color:#A0A0A0"> &#x3C;&#x3C;</span><span style="color:#FFF">'EOF'</span></span>
+<span class="line"><span style="color:#99FFE4">*.err /var/adm/messages</span></span>
+<span class="line"><span style="color:#99FFE4">kern.debug /var/adm/messages</span></span>
+<span class="line"><span style="color:#99FFE4">daemon.notice /var/adm/messages</span></span>
+<span class="line"><span style="color:#FFF">EOF</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> restart</span><span style="color:#99FFE4"> rsyslog</span></span></code></pre>
+<p>内核调试级日志量很大，上线前必须配好轮转与容量告警。</p>
+<h3 id="第六步系统设置与-selinux">第六步：系统设置与 SELinux</h3>
+<p>这一组改动都短，影响很直接：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '$ a\TMOUT=1800'</span><span style="color:#99FFE4"> /etc/profile</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '$ a\* hard maxlogins 10'</span><span style="color:#99FFE4"> /etc/security/limits.conf</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '$ a\umask 027'</span><span style="color:#99FFE4"> /etc/sysconfig/init</span></span>
+<span class="line"><span style="color:#FFC799">printf</span><span style="color:#99FFE4"> 'kernel.core_pattern=|/bin/false\n'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/sysctl.conf</span></span>
+<span class="line"><span style="color:#FFC799">echo</span><span style="color:#FFC799"> 0</span><span style="color:#A0A0A0"> ></span><span style="color:#99FFE4"> /proc/sys/kernel/ctrl-alt-del</span></span>
+<span class="line"><span style="color:#FFC799">printf</span><span style="color:#99FFE4"> 'CtrlAltDelBurstAction=none\n'</span><span style="color:#A0A0A0"> >></span><span style="color:#99FFE4"> /etc/systemd/system.conf</span></span>
+<span class="line"><span style="color:#FFC799">systemctl</span><span style="color:#99FFE4"> daemon-reexec</span><span style="color:#FFF"> &#x26;&#x26; </span><span style="color:#FFC799">sysctl</span><span style="color:#99FFE4"> -p</span></span></code></pre>
+<p>关闭 core dump 是因为转储文件可能含内存里的凭据；禁用组合键重启是防误触导致业务中断。时间同步建议用 chrony，沿用 ntpdate 时十分钟一次，源地址按环境替换：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">echo</span><span style="color:#99FFE4"> '*/10 * * * * /usr/sbin/ntpdate 192.0.2.10'</span><span style="color:#A0A0A0"> |</span><span style="color:#FFC799"> crontab</span><span style="color:#99FFE4"> -</span></span>
+<span class="line"><span style="color:#FFC799">crontab</span><span style="color:#99FFE4"> -l</span></span></code></pre>
+<p>SELinux 用 permissive 而不是 disabled：不影响业务，又保留拒绝记录。改引导参数、改配置、重打标签三步缺一不可，首次重打标签的重启会明显变慢，要预留窗口：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> SELINUX</span><span style="color:#99FFE4"> /etc/selinux/config</span></span>
+<span class="line"><span style="color:#FFC799">touch</span><span style="color:#99FFE4"> /.autorelabel</span></span>
+<span class="line"><span style="color:#FFC799">reboot</span></span>
+<span class="line"><span style="color:#FFC799">getenforce</span></span></code></pre>
+<h3 id="第七步文件权限">第七步：文件权限</h3>
+<p>启动目录只允许属主写，防止普通用户替换服务单元；重要文件按最小可用原则收权限：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">chmod</span><span style="color:#99FFE4"> -R</span><span style="color:#FFC799"> 744</span><span style="color:#99FFE4"> /etc/systemd/system</span><span style="color:#99FFE4"> /etc/systemd/user</span><span style="color:#99FFE4"> /etc/systemd/network</span></span>
+<span class="line"><span style="color:#FFC799">chmod</span><span style="color:#FFC799"> 750</span><span style="color:#99FFE4"> /etc/rc.d/init.d</span><span style="color:#99FFE4"> /etc/rc0.d</span><span style="color:#99FFE4"> /etc/rc1.d</span><span style="color:#99FFE4"> /etc/rc2.d</span><span style="color:#99FFE4"> /etc/rc5.d</span><span style="color:#99FFE4"> /etc/rc6.d</span></span>
+<span class="line"><span style="color:#FFC799">chmod</span><span style="color:#FFC799"> 644</span><span style="color:#99FFE4"> /etc/passwd</span><span style="color:#99FFE4"> /etc/group</span><span style="color:#99FFE4"> /etc/services</span></span>
+<span class="line"><span style="color:#FFC799">chmod</span><span style="color:#FFC799"> 600</span><span style="color:#99FFE4"> /etc/shadow</span><span style="color:#99FFE4"> /etc/xinetd.conf</span><span style="color:#99FFE4"> /boot/efi/EFI/kylin/grub.cfg</span></span></code></pre>
+<p><code>/etc/security</code> 在基线里常被写成 600，照抄文件权限会出问题：目录去掉执行位后连 <code>cd</code> 都进不去，认证会异常。目录取 700 或 750，600 只留给目录里的文件，偏差写进说明。</p>
+<p>日志侧要求组不可写执行、其他无权限，并固定新建日志的默认模式：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFC799">find</span><span style="color:#99FFE4"> /var/log</span><span style="color:#99FFE4"> -type</span><span style="color:#99FFE4"> f</span><span style="color:#99FFE4"> -perm</span><span style="color:#99FFE4"> /027</span></span>
+<span class="line"><span style="color:#FFC799">find</span><span style="color:#99FFE4"> /var/log</span><span style="color:#99FFE4"> -type</span><span style="color:#99FFE4"> f</span><span style="color:#99FFE4"> -exec</span><span style="color:#99FFE4"> chmod</span><span style="color:#99FFE4"> g-wx,o-rwx</span><span style="color:#99FFE4"> {}</span><span style="color:#99FFE4"> +</span></span>
+<span class="line"><span style="color:#FFC799">grep</span><span style="color:#99FFE4"> -nE</span><span style="color:#99FFE4"> 'FileCreateMode|DirCreateMode'</span><span style="color:#99FFE4"> /etc/rsyslog.conf</span></span></code></pre>
+<p>在 <code>rsyslog.conf</code> 中设 <code>$FileCreateMode 0640</code>、<code>$DirCreateMode 0755</code>，否则新日志又回到宽松权限。留痕文件会被上面的 find 命中，属已知例外，在检查脚本里显式排除。</p>
+<h3 id="第八步口令与账号">第八步：口令与账号</h3>
+<p>口令复杂度靠质量模块，长度、字符类、字典与相似性检查一起配，对 root 同样生效：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFF">P</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">/etc/security/pwquality.conf</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's/^#\?minlen.*/minlen = 12/'</span><span style="color:#FFF"> $P</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> 's/^#\?minclass.*/minclass = 4/'</span><span style="color:#FFF"> $P</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '$ a\dictcheck = 1'</span><span style="color:#FFF"> $P</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '$ a\usercheck = 1'</span><span style="color:#FFF"> $P</span></span>
+<span class="line"><span style="color:#FFC799">sed</span><span style="color:#99FFE4"> -i</span><span style="color:#99FFE4"> '$ a\palindromic'</span><span style="color:#FFF"> $P</span></span></code></pre>
+<p>再在认证栈的 <code>pam_pwquality</code> 行追加 <code>enforce_for_root</code>，让 root 改密同样受控。失败锁定取 5 次、900 秒，既挡暴力破解，又不会把敲错口令的人锁太久。同源认证栈必须同步改，否则不同入口两套策略；锁定状态用 <code>faillock --user</code> 查看。账号侧清理默认账号、服务账号设不可登录；只读入口建议单建普通账号并授最小 sudo，比再造 uid 0 账号安全——重复超级用户会让审计难分辨操作者。</p>
+<h3 id="第九步维护模式与别名">第九步：维护模式与别名</h3>
+<p>别名文件中除 <code>postmaster: root</code> 外的 root 别名应注释，避免邮件落到别处。限制维护模式是双刃剑：注释救援项能防无认证进单用户，也切断本地急救通道，动手前必须确认带外管理可用并在测试机验证引导。</p>
+<h2 id="验证">验证</h2>
+<p>逐条重跑上表命令，确认五件事：<code>auditctl -l</code> 能看到全部关键字且重启后仍在；<code>getenforce</code> 返回 permissive；<code>sshd -T</code> 的端口、日志级别、尝试次数与预期一致；<code>find /var/log -type f -perm /027</code> 为空（除登记例外）；普通账号实测 su 被拒、连错口令被锁。</p>
+<h2 id="风险与回滚">风险与回滚</h2>
+<p>最大的风险依次是 SSH 把运维锁在门外、认证栈改错无法登录、引导配置改错无法启动。前两个靠备份、保留会话与带外通道兜底，第三个只能靠改前备份、改后先在控制台重启验证：</p>
+<pre class="astro-code vesper" style="background-color:#101010;color:#FFF; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#FFF">BK</span><span style="color:#A0A0A0">=</span><span style="color:#99FFE4">/root/kylin-baseline-</span><span style="color:#FFF">$(</span><span style="color:#FFC799">date</span><span style="color:#99FFE4"> +%F</span><span style="color:#FFF">); </span><span style="color:#FFC799">mkdir</span><span style="color:#99FFE4"> -p</span><span style="color:#FFF"> $BK</span></span>
+<span class="line"><span style="color:#FFC799">cp</span><span style="color:#99FFE4"> -a</span><span style="color:#99FFE4"> /etc/ssh/sshd_config</span><span style="color:#99FFE4"> /etc/pam.d/system-auth</span><span style="color:#99FFE4"> /etc/pam.d/su</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">     /etc/security/pwquality.conf</span><span style="color:#99FFE4"> /etc/selinux/config</span><span style="color:#99FFE4"> /etc/sysctl.conf</span><span style="color:#A0A0A0"> \</span></span>
+<span class="line"><span style="color:#99FFE4">     /etc/profile</span><span style="color:#99FFE4"> /etc/bashrc</span><span style="color:#99FFE4"> /etc/systemd/system.conf</span><span style="color:#FFF"> $BK</span><span style="color:#99FFE4">/</span></span></code></pre>
+<p>回滚就是覆盖备份并重启服务，引导参数改动必须重启验证。SELinux 重打标签耗时长但别跳过，跳过会留下大量错误上下文，排查更麻烦。</p>
+<h2 id="参考截图">参考截图</h2>
+<figure>
+  <img src="/img/docs/麒麟安全基线/01.webp" alt="麒麟 V10 安装完成页" width="1100" height="824" loading="lazy" decoding="async">
+  <figcaption>图　麒麟 V10 安装完成页</figcaption>
+</figure>
+<figure>
+  <img src="/img/docs/麒麟安全基线/02.webp" alt="安装摘要：确认语言、时区、软件与安装目标" width="1100" height="815" loading="lazy" decoding="async">
+  <figcaption>图　安装摘要：确认语言、时区、软件与安装目标</figcaption>
+</figure>
+<figure>
+  <img src="/img/docs/麒麟安全基线/03.webp" alt="root 口令设置页：复杂度与确认项" width="1100" height="815" loading="lazy" decoding="async">
+  <figcaption>图　root 口令设置页：复杂度与确认项</figcaption>
+</figure>
+<h2 id="常见问题">常见问题</h2>
+<ul>
+<li><strong><code>auditctl -l</code> 是空的</strong>：规则文件没被加载，检查是否在 <code>rules.d</code> 下、属主是否 root，再重启 auditd。</li>
+<li><strong>目录改成 600 后进不去</strong>：目录需要执行位才能遍历，600 只适用于文件，目录用 700 或 750。</li>
+<li><strong>改完认证栈无法登录</strong>：用控制台恢复，覆盖备份后重启；改前一定留活跃 root 会话。</li>
+<li><strong>口令策略对老账号无效</strong>：质量模块只在改密时校验，需配合强制改密周期。</li>
+</ul> <nav class="post-nav" aria-label="上下篇"> <a href="/2026/01/30/运维手册/k8s集群新增节点初始化/"> <span class="label">← 上一篇</span> <span class="title">K8s 集群新增节点初始化清单</span> </a> <a class="next" href="/2026/06/11/运维手册/vmware迁移smartx/"> <span class="label">下一篇 →</span> <span class="title">VMware 到 SmartX 的在线迁移实施要点</span> </a> </nav> <nav class="doc-related" aria-label="同分类文档"> <p class="doc-related-title">「操作系统与安全基线」其他文档</p> <ul> <li><a href="/2024/12/17/运维手册/centos7安全基线/">CentOS 7 安全基线核查与落地清单</a></li><li><a href="/2025/04/27/运维手册/ubuntu-cuda部署/">Ubuntu 22.04 安装 NVIDIA 驱动与 CUDA 11.8</a></li> </ul> </nav> <section class="comments" id="comments"> <h2 class="comments-title">评论</h2> <div class="giscus" data-giscus data-repo="OhhSong/OhhSong.github.io" data-repo-id="R_kgDOLEEmVg" data-category="Announcements" data-category-id="DIC_kwDOLEEmVs4DJLgE" data-mapping="pathname" data-reactions-enabled="1" data-input-position="top" data-lang="zh-CN" data-loading="lazy"> <p style="color: var(--muted); font-size: .9rem">正在加载评论…</p> </div> </section> <script>
+  (function () {
+    var host = document.querySelector('[data-giscus]');
+    if (!host) return;
+
+    function currentTheme() {
+      return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+    }
+
+    function mount() {
+      if (host.dataset.mounted) return;
+      host.dataset.mounted = '1';
+      host.innerHTML = '';
+      var s = document.createElement('script');
+      s.src = 'https://giscus.app/client.js';
+      s.async = true;
+      s.crossOrigin = 'anonymous';
+      s.setAttribute('data-repo', host.dataset.repo);
+      s.setAttribute('data-repo-id', host.dataset.repoId);
+      s.setAttribute('data-category', host.dataset.category);
+      s.setAttribute('data-category-id', host.dataset.categoryId);
+      s.setAttribute('data-mapping', host.dataset.mapping);
+      s.setAttribute('data-reactions-enabled', host.dataset.reactionsEnabled);
+      s.setAttribute('data-input-position', host.dataset.inputPosition);
+      s.setAttribute('data-lang', host.dataset.lang);
+      s.setAttribute('data-theme', currentTheme());
+      s.setAttribute('data-loading', 'lazy');
+      host.appendChild(s);
+    }
+
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(
+        function (entries) {
+          if (entries.some(function (e) { return e.isIntersecting; })) {
+            io.disconnect();
+            mount();
+          }
+        },
+        { rootMargin: '400px 0px' }
+      );
+      io.observe(host);
+    } else {
+      mount();
+    }
+
+    window.addEventListener('themechange', function (e) {
+      var frame = document.querySelector('iframe.giscus-frame');
+      if (!frame) return;
+      frame.contentWindow.postMessage(
+        { giscus: { setConfig: { theme: e.detail === 'dark' ? 'dark' : 'light' } } },
+        'https://giscus.app'
+      );
+    });
+  })();
+</script> </div> <nav class="toc" aria-label="目录" data-toc><p class="toc-title">目录</p><ol><li class="depth-2"><a href="#一句话定位">一句话定位</a></li><li class="depth-2"><a href="#适用场景">适用场景</a></li><li class="depth-2"><a href="#前置条件">前置条件</a></li><li class="depth-2"><a href="#操作步骤">操作步骤</a></li><li class="depth-3"><a href="#基线项总览">基线项总览</a></li><li class="depth-3"><a href="#第一步安装形态与软件源">第一步：安装形态与软件源</a></li><li class="depth-3"><a href="#第二步网络与服务面">第二步：网络与服务面</a></li><li class="depth-3"><a href="#第三步ssh-与登录入口">第三步：SSH 与登录入口</a></li><li class="depth-3"><a href="#第四步sudo-日志与命令留痕">第四步：sudo 日志与命令留痕</a></li><li class="depth-3"><a href="#第五步审计">第五步：审计</a></li><li class="depth-3"><a href="#第六步系统设置与-selinux">第六步：系统设置与 SELinux</a></li><li class="depth-3"><a href="#第七步文件权限">第七步：文件权限</a></li><li class="depth-3"><a href="#第八步口令与账号">第八步：口令与账号</a></li><li class="depth-3"><a href="#第九步维护模式与别名">第九步：维护模式与别名</a></li><li class="depth-2"><a href="#验证">验证</a></li><li class="depth-2"><a href="#风险与回滚">风险与回滚</a></li><li class="depth-2"><a href="#参考截图">参考截图</a></li><li class="depth-2"><a href="#常见问题">常见问题</a></li></ol></nav><script>
+  (function () {
+    var nav = document.querySelector('[data-toc]');
+    if (!nav) return;
+    var links = Array.from(nav.querySelectorAll('a'));
+    var targets = links
+      .map(function (a) {
+        var id = decodeURIComponent(a.getAttribute('href').slice(1));
+        return document.getElementById(id);
+      })
+      .filter(Boolean);
+    if (!targets.length) return;
+
+    var observer = new IntersectionObserver(
+      function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (a) {
+            a.classList.toggle('active', a.getAttribute('href') === '#' + entry.target.id);
+          });
+        });
+      },
+      { rootMargin: '-96px 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach(function (t) { observer.observe(t); });
+  })();
+</script> </div> </div> </article>  </main> <footer class="site-footer"> <div class="container"> <div class="footer-grid"> <div> <p class="footer-brand">ImsayingOhh</p> <p class="footer-note">椿萱并茂，棠棣同馨</p> </div> <div> <p class="footer-title">浏览</p> <div class="footer-links"> <a href="/">首页</a> <a href="/archives/">归档</a> <a href="/tags/">标签</a> <a href="/about/">关于</a> </div> </div> <div> <p class="footer-title">联系</p> <div class="footer-links"> <a href="https://github.com/OhhSong" target="_blank" rel="noopener noreferrer"> GitHub </a><a href="mailto:2727125213@qq.com" rel="noopener noreferrer"> 邮箱 </a><a href="/rss.xml" rel="noopener noreferrer"> RSS </a> </div> </div> </div> <div class="footer-bottom"> <span>© 2024–2026 Ohh · 保留所有权利</span> <span>Built with Astro · <a href="/rss.xml">RSS</a></span> </div> </div> </footer> <script>
+      (function () {
+        var btn = document.querySelector('[data-theme-toggle]');
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+          var root = document.documentElement;
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('theme', next); } catch (e) {}
+          window.dispatchEvent(new CustomEvent('themechange', { detail: next }));
+        });
+      })();
+    </script> </body> </html>
